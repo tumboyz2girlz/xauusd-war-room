@@ -12,8 +12,12 @@ import time
 from time import mktime
 from tvDatafeed import TvDatafeed, Interval
 
-# --- 1. CONFIGURATION ---
+# --- 1. CONFIGURATION & MEMORY ---
 st.set_page_config(page_title="Kwaktong Local Station", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+
+# ระบบความจำสำหรับบันทึกตัวเลขข่าวแบบ Manual
+if 'manual_overrides' not in st.session_state:
+    st.session_state.manual_overrides = {}
 
 st.markdown("""
 <style>
@@ -32,6 +36,11 @@ st.markdown("""
     .score-high {color: #ff3333; font-weight: bold;}
     .score-med {color: #ffcc00; font-weight: bold;}
     .score-low {color: #00ffcc; font-weight: bold;}
+    
+    /* ตกแต่ง Tabs สลับกราฟ */
+    .stTabs [data-baseweb="tab-list"] {gap: 10px;}
+    .stTabs [data-baseweb="tab"] {background-color: #1a1a2e; border-radius: 5px 5px 0 0; padding: 10px 20px;}
+    .stTabs [aria-selected="true"] {background-color: #d4af37 !important; color: #000 !important; font-weight: bold;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -48,8 +57,6 @@ def init_tv():
 def get_market_data():
     metrics, gold_df = {}, None
     data_source = "OANDA (Direct)"
-    
-    # ก๊อก 1: TradingView
     tv = init_tv()
     if tv is not None:
         try:
@@ -62,18 +69,13 @@ def get_market_data():
         except:
             gold_df = None
             
-    # ก๊อก 2, 3, 4: Yahoo Finance Fallbacks (ดึง 1 เดือนเต็ม เพื่อให้แท่งเทียนพอคำนวณ EMA50)
     if gold_df is None or gold_df.empty:
         data_source = "Yahoo Finance (Spot 15m)"
         try:
             h = yf.Ticker("XAUUSD=X").history(period="1mo", interval="15m")
-            
-            # ก๊อก 3: ถ้า Spot ทองพัง ลองฟิวเจอร์ส
             if h is None or h.empty or len(h) < 55:
                 h = yf.Ticker("GC=F").history(period="1mo", interval="15m")
                 data_source = "Yahoo Finance (Futures 15m)"
-                
-            # ก๊อก 4: ถ้า 15 นาทีพังหมด ให้ดึง 1 ชั่วโมง
             if h is None or h.empty or len(h) < 55:
                 h = yf.Ticker("XAUUSD=X").history(period="1mo", interval="1h")
                 data_source = "Yahoo Finance (Spot 1h Fallback)"
@@ -83,10 +85,8 @@ def get_market_data():
                 prev_gold = float(h['Close'].iloc[-2])
                 metrics['GOLD'] = (curr_gold, ((curr_gold - prev_gold) / prev_gold) * 100)
                 gold_df = h.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'})
-            else:
-                metrics['GOLD'] = (0.0, 0.0)
-        except:
-            metrics['GOLD'] = (0.0, 0.0)
+            else: metrics['GOLD'] = (0.0, 0.0)
+        except: metrics['GOLD'] = (0.0, 0.0)
 
     try:
         h_dxy = yf.Ticker("DX-Y.NYB").history(period="1mo", interval="15m")
@@ -115,84 +115,84 @@ def get_retail_sentiment(trend_direction):
     elif trend_direction == "DOWN": return "Retail is mostly LONG (70%) -> เราหาจังหวะ SHORT"
     else: return "Retail is Indecisive (50/50)"
 
+# --- ท่อดูด XML แบบแยกชิ้น (เพื่อให้รับ Manual Override ทันที) ---
 @st.cache_data(ttl=300)
-def get_forexfactory_usd():
+def fetch_ff_xml():
     url = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
+    try: return ET.fromstring(requests.get(url, timeout=5).content)
+    except: return None
+
+def get_forexfactory_usd(manual_overrides):
+    root = fetch_ff_xml()
     events, max_smis = [], 0
+    if root is None: return events, max_smis
+    
     now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     
-    try:
-        root = ET.fromstring(requests.get(url, timeout=5).content)
-        for event in root.findall('event'):
-            if event.find('country').text == 'USD' and event.find('impact').text in ['High', 'Medium', 'Low']:
-                date_str = event.find('date').text
-                raw_time = event.find('time').text
-                impact = event.find('impact').text
-                title = event.find('title').text
-                
-                if not raw_time or not any(c.isdigit() for c in raw_time): continue
-                
+    for event in root.findall('event'):
+        if event.find('country').text == 'USD' and event.find('impact').text in ['High', 'Medium', 'Low']:
+            date_str = event.find('date').text
+            raw_time = event.find('time').text
+            impact = event.find('impact').text
+            title = event.find('title').text
+            
+            if not raw_time or not any(c.isdigit() for c in raw_time): continue
+            
+            try:
+                gmt_dt = datetime.datetime.strptime(f"{date_str} {raw_time.strip().lower()}", "%m-%d-%Y %I:%M%p")
+                thai_dt = gmt_dt + datetime.timedelta(hours=7)
+            except: continue
+
+            time_diff_hours = (thai_dt - now_thai).total_seconds() / 3600
+            
+            # ⏳ THE DYNAMIC TIME FILTER
+            if time_diff_hours < -12: continue
+            if impact == 'High' and time_diff_hours > 24: continue
+            elif impact in ['Medium', 'Low'] and time_diff_hours > 4: continue
+            
+            thai_time_str = thai_dt.strftime("%d %b - %H:%M น.")
+            actual = event.find('actual').text if event.find('actual') is not None else "Pending"
+            forecast = event.find('forecast').text if event.find('forecast') is not None else ""
+            
+            # 🔥 MANUAL OVERRIDE LOGIC 🔥
+            is_manual = False
+            if title in manual_overrides and manual_overrides[title].strip() != "":
+                actual = manual_overrides[title].strip()
+                is_manual = True
+            
+            base_smis = 8.0 if impact == 'High' else (5.0 if impact == 'Medium' else 2.0)
+            gold_impact = "⏳ รอดูตัวเลข (Pending)"
+            surprise_factor = 0
+
+            if actual != "Pending" and actual and forecast:
                 try:
-                    gmt_dt = datetime.datetime.strptime(f"{date_str} {raw_time.strip().lower()}", "%m-%d-%Y %I:%M%p")
-                    thai_dt = gmt_dt + datetime.timedelta(hours=7)
-                except: continue
-
-                # -----------------------------------------------------
-                # ⏳ THE DYNAMIC TIME FILTER (ลดสัญญาณรบกวน)
-                # -----------------------------------------------------
-                time_diff_hours = (thai_dt - now_thai).total_seconds() / 3600
-                
-                # กฎ 12 ชั่วโมง: ถ้าข่าวผ่านไปเกิน 12 ชม. แล้ว ให้ตัดทิ้ง
-                if time_diff_hours < -12:
-                    continue
+                    act_val = float(''.join(c for c in actual if c.isdigit() or c == '.' or c == '-'))
+                    for_val = float(''.join(c for c in forecast if c.isdigit() or c == '.' or c == '-'))
+                    diff_pct = abs((act_val - for_val) / for_val) if for_val != 0 else 0
+                    if diff_pct > 0.1: surprise_factor = 1.0
+                    elif diff_pct > 0.2: surprise_factor = 2.0
                     
-                # กฎล่วงหน้า (Look-ahead): แยกตามสีกล่อง
-                if impact == 'High':
-                    if time_diff_hours > 24: # กล่องแดง มองล่วงหน้า 24 ชม.
-                        continue
-                elif impact in ['Medium', 'Low']:
-                    if time_diff_hours > 4:  # กล่องส้มและเหลือง มองล่วงหน้าแค่ 4 ชม.
-                        continue
-                # -----------------------------------------------------
-                
-                thai_time_str = thai_dt.strftime("%d %b - %H:%M น.")
-                actual = event.find('actual').text if event.find('actual') is not None else "Pending"
-                forecast = event.find('forecast').text if event.find('forecast') is not None else ""
-                
-                base_smis = 8.0 if impact == 'High' else (5.0 if impact == 'Medium' else 2.0)
-                gold_impact = "⏳ รอดูตัวเลข (Pending)"
-                surprise_factor = 0
+                    if "Claims" in title or "Unemployment" in title:
+                        gold_impact = "🟢 หนุนทอง (USD อ่อน)" if act_val > for_val else "🔴 กดดันทอง (USD แข็ง)"
+                    else:
+                        gold_impact = "🔴 กดดันทอง (USD แข็ง)" if act_val > for_val else "🟢 หนุนทอง (USD อ่อน)"
+                except:
+                    gold_impact = "⚡ ตัวเลขออกแล้ว"
 
-                if actual != "Pending" and actual and forecast:
-                    try:
-                        act_val = float(''.join(c for c in actual if c.isdigit() or c == '.' or c == '-'))
-                        for_val = float(''.join(c for c in forecast if c.isdigit() or c == '.' or c == '-'))
-                        diff_pct = abs((act_val - for_val) / for_val) if for_val != 0 else 0
-                        if diff_pct > 0.1: surprise_factor = 1.0
-                        elif diff_pct > 0.2: surprise_factor = 2.0
-                        
-                        if "Claims" in title or "Unemployment" in title:
-                            gold_impact = "🟢 หนุนทอง (USD อ่อน)" if act_val > for_val else "🔴 กดดันทอง (USD แข็ง)"
-                        else:
-                            gold_impact = "🔴 กดดันทอง (USD แข็ง)" if act_val > for_val else "🟢 หนุนทอง (USD อ่อน)"
-                    except:
-                        gold_impact = "⚡ ตัวเลขออกแล้ว"
+            if is_manual: gold_impact += " ✍️(Manual)"
 
-                smis = min(10.0, base_smis + surprise_factor)
-                if max_smis < smis: max_smis = smis
-                
-                events.append({'title': title, 'time': thai_time_str, 'impact': impact, 'actual': actual, 'forecast': forecast, 'smis': smis, 'gold_impact': gold_impact, 'dt': thai_dt})
-        
-        events.sort(key=lambda x: x['dt'])
-        return events, max_smis
-    except: return [], 0
+            smis = min(10.0, base_smis + surprise_factor)
+            if max_smis < smis: max_smis = smis
+            
+            events.append({'title': title, 'time': thai_time_str, 'impact': impact, 'actual': actual, 'forecast': forecast, 'smis': smis, 'gold_impact': gold_impact, 'dt': thai_dt})
+    
+    events.sort(key=lambda x: x['dt'])
+    return events, max_smis
 
 @st.cache_data(ttl=300)
 def get_global_news():
     fed_url = "https://www.federalreserve.gov/feeds/press_all.xml"
     macro_url = "https://news.google.com/rss/search?q=(Gold+OR+XAUUSD+OR+Fed+OR+War+OR+Inflation)+site:reuters.com+OR+site:bloomberg.com+OR+site:bbc.com+OR+site:finance.yahoo.com&hl=en-US&gl=US&ceid=US:en"
-    investing_url = "https://news.google.com/rss/search?q=(Gold+OR+XAUUSD+OR+Fed+OR+Inflation)+site:investing.com&hl=en-US&gl=US&ceid=US:en" 
-    
     all_news, current_time = [], time.time()
     translator = GoogleTranslator(source='en', target='th')
     
@@ -219,11 +219,9 @@ def get_global_news():
         except: pass
 
     process_feed(fed_url, "Federal Reserve", 3)
-    process_feed(investing_url, "Investing.com", 5) 
     process_feed(macro_url, "Global Macro", 5)
-    
     all_news.sort(key=lambda x: x['pub_time'], reverse=True)
-    return all_news[:12]
+    return all_news[:10]
 
 # --- 3. THE 5 PILLARS STRATEGY ENGINE ---
 def calculate_hybrid_strategy(df, absolute_max_smis, dxy_change, spdr_status):
@@ -272,59 +270,28 @@ def calculate_hybrid_strategy(df, absolute_max_smis, dxy_change, spdr_status):
 
 # --- 4. EXECUTIVE & EA ADVICE ENGINE ---
 def get_executive_summary(metrics, spdr, max_smis, signal, ff_events, data_source):
-    if not metrics or 'GOLD' not in metrics or metrics['GOLD'][0] == 0:
-        return "ระบบกำลังรวบรวมและวิเคราะห์ข้อมูลล่าสุด กรุณารอสักครู่..."
-    
+    if not metrics or 'GOLD' not in metrics or metrics['GOLD'][0] == 0: return "ระบบกำลังรวบรวมข้อมูล..."
     gold_val, gold_pct = metrics['GOLD']
     dxy_val, dxy_pct = metrics['DXY']
-    gold_dir = "ขยับขึ้น" if gold_pct >= 0 else "ย่อตัวลง"
-    dxy_dir = "แข็งค่า" if dxy_pct >= 0 else "อ่อนค่า"
-    
-    gold_txt = f"**ราคาทองคำ (อ้างอิง {data_source})** {gold_dir}อยู่ที่ระดับ ${gold_val:,.2f} ({'+' if gold_pct>0 else ''}{gold_pct:.2f}%)"
-    dxy_txt = f"สวนทางกับ **ดัชนีดอลลาร์ (DXY)** ที่มีแนวโน้ม{dxy_dir} ({dxy_val:,.2f})"
+    gold_txt = f"**ราคาทองคำ (อ้างอิง {data_source})** {'ขยับขึ้น' if gold_pct >= 0 else 'ย่อตัวลง'}อยู่ที่ระดับ ${gold_val:,.2f} ({'+' if gold_pct>0 else ''}{gold_pct:.2f}%)"
+    dxy_txt = f"สวนทางกับ **ดัชนีดอลลาร์ (DXY)** ที่มีแนวโน้ม{'แข็งค่า' if dxy_pct >= 0 else 'อ่อนค่า'} ({dxy_val:,.2f})"
     smis_txt = "มีความผันผวนสูงมาก (อันตราย)" if max_smis >= 8.5 else "มีความผันผวนระดับปานกลาง" if max_smis >= 5 else "สภาวะตลาดปกติ (ปลอดภัย)"
     
-    ff_txt = ""
-    if ff_events:
-        top_event = ff_events[0]
-        ff_txt = f" โดยมีปัจจัยเศรษฐกิจต้องจับตาคือ **{top_event['title']}** ({top_event['gold_impact']})"
-        
-    bias = "รอดูความชัดเจน (Wait & See)"
-    if "LONG" in signal: bias = "เอื้อต่อฝั่งซื้อ (LONG) ✅"
-    elif "SHORT" in signal: bias = "เอื้อต่อฝั่งขาย (SHORT) 🔻"
+    ff_txt = f" โดยมีปัจจัยเศรษฐกิจต้องจับตาคือ **{ff_events[0]['title']}** ({ff_events[0]['gold_impact']})" if ff_events else ""
+    bias = "เอื้อต่อฝั่งซื้อ (LONG) ✅" if "LONG" in signal else "เอื้อต่อฝั่งขาย (SHORT) 🔻" if "SHORT" in signal else "รอดูความชัดเจน (Wait & See)"
 
-    text = f"📍 <b>สถานะตลาด:</b> {gold_txt} {dxy_txt} ในขณะที่พฤติกรรมสถาบัน (SPDR) บ่งชี้สถานะ **{spdr}**<br><br>"
-    text += f"📰 <b>กระแสข่าว (Catalyst):</b> ข่าวสารมวลรวม{smis_txt}{ff_txt}<br>"
-    text += f"🎯 <b>บทสรุปกวักทอง (Bias):</b> โครงสร้าง 5 Pillars ชี้ว่าตลาด **{bias}**"
-    return text
+    return f"📍 <b>สถานะตลาด:</b> {gold_txt} {dxy_txt} ในขณะที่ SPDR บ่งชี้สถานะ **{spdr}**<br><br>📰 <b>กระแสข่าว:</b> ข่าวสารมวลรวม{smis_txt}{ff_txt}<br>🎯 <b>บทสรุป (Bias):</b> โครงสร้าง 5 Pillars ชี้ว่าตลาด **{bias}**"
 
 def get_ea_advice(trend, dxy_change, spdr_status, max_smis, signal):
-    if max_smis >= 8.5:
-        advice = "🛑 ปิดปุ่ม Auto Trading ชั่วคราว (Force Pause EA)"
-        reason = f"ความผันผวนจากข่าวมหภาคพุ่งถึงขีดอันตราย (SMIS: {max_smis:.1f}/10) เสี่ยงเกิด Whipsaw กวาด Stoploss รุนแรง แม้ EA จะมี News Filter แต่เพื่อความปลอดภัย +EV สูงสุด ควรหลีกเลี่ยงการให้ EA วาง Buy/Sell Limit อัตโนมัติในช่วงเวลานี้"
-        css_class = "ea-red"
-    elif "WAIT" in signal:
-        advice = "⚠️ ระวังการเปิด Buy Limit / เตรียมพร้อมแทรกแซง"
-        reason = f"โครงสร้าง 5 Pillars เริ่มขัดแย้งกัน (เทรนด์หลัก {trend} แต่ DXY เปลี่ยนแปลง {dxy_change:.2f}% และพฤติกรรมเจ้ามือคือ {spdr_status}) หาก EA กำลังฝืนเปิด Buy Limit สวนทางกับกระแสน้ำ พี่ตั้มควรเฝ้าระวังพอร์ต หากโดนลากจนระบบกางโล่ Hedge ให้เตรียมพร้อมปิดรวบหากจำเป็น"
-        css_class = "ea-warning"
-    elif "LONG" in signal:
-        advice = "▶️ รัน EA (Buy Limit Mode) ได้เต็มสูบ"
-        reason = f"สภาวะตลาดเป็นใจขั้นสุด (EV+) โครงสร้าง 5 Pillars สนับสนุนขาขึ้น DXY อ่อนค่าเป็นใจ ({dxy_change:.2f}%) และไม่มีพายุข่าวรุนแรง (SMIS: {max_smis:.1f}) ปล่อยให้ EA กาง Buy Grid เก็บ Cash Flow ตามวงจรได้อย่างสบายใจ"
-        css_class = "ea-green"
-    elif "SHORT" in signal:
-        advice = "▶️ รัน EA (Sell Grid Mode) / ห้ามฝืน Buy Limit"
-        reason = f"ตลาดกดดันทองคำอย่างหนัก DXY แข็งค่า ({dxy_change:.2f}%) หาก EA สลับเป็นโหมด Sell Grid ให้รันต่อไปได้ แต่ถ้าระบบยังพยายามกาง Buy Limit ให้พี่ตั้มระวังพอร์ตโดนลากเข้าโหมดกู้ชีพ (Recovery) เนื่องจากโมเมนตัมหลักเอื้อต่อการ Sell"
-        css_class = "ea-green"
-    else:
-        advice = "⏳ กำลังประมวลผลคำแนะนำ..."
-        reason = "รอข้อมูลอัปเดตจากตลาด กรุณารอสักครู่"
-        css_class = "ea-warning"
-        
-    return advice, reason, css_class
+    if max_smis >= 8.5: return "🛑 ปิดปุ่ม Auto Trading ชั่วคราว (Force Pause EA)", f"ความผันผวนจากข่าวมหภาคพุ่งถึงขีดอันตราย (SMIS: {max_smis:.1f}/10) เสี่ยงเกิด Whipsaw กวาด Stoploss แม้ EA จะมี News Filter แต่เพื่อความปลอดภัยสูงสุด ควรหลีกเลี่ยงการวางรันอัตโนมัติ", "ea-red"
+    elif "WAIT" in signal: return "⚠️ ระวังการเปิด Buy Limit / เตรียมแทรกแซง", f"โครงสร้าง 5 Pillars ขัดแย้งกัน (เทรนด์ {trend} แต่ DXY เปลี่ยนแปลง {dxy_change:.2f}%) หาก EA ฝืนเปิด Buy Limit สวนกระแส ให้เฝ้าระวังพอร์ต หากโดนลากจนระบบกางโล่ Hedge เตรียมพร้อมปิดรวบ", "ea-warning"
+    elif "LONG" in signal: return "▶️ รัน EA (Buy Limit Mode) ได้เต็มสูบ", f"สภาวะตลาดเป็นใจ (EV+) โครงสร้าง 5 Pillars สนับสนุนขาขึ้น DXY อ่อนค่าเป็นใจ ({dxy_change:.2f}%) ปล่อยให้ EA กาง Buy Grid เก็บ Cash Flow ได้อย่างสบายใจ", "ea-green"
+    elif "SHORT" in signal: return "▶️ รัน EA (Sell Grid Mode) / ห้ามฝืน Buy Limit", f"ตลาดกดดันทองคำ DXY แข็งค่า ({dxy_change:.2f}%) หาก EA สลับเป็นโหมด Sell Grid ให้รันต่อไปได้ แต่ถ้าระบบยังพยายามกาง Buy Limit ให้ระวังพอร์ตโดนลาก", "ea-green"
+    else: return "⏳ กำลังประมวลผลคำแนะนำ...", "รอข้อมูลอัปเดต", "ea-warning"
 
 # --- 5. UI DASHBOARD ---
 metrics, gold_df, data_source = get_market_data()
-ff_events, max_ff_smis = get_forexfactory_usd()
+ff_events, max_ff_smis = get_forexfactory_usd(st.session_state.manual_overrides)
 global_news = get_global_news()
 spdr_status = get_spdr_flow()
 
@@ -334,12 +301,32 @@ absolute_max_smis = max(max_ff_smis, max_news_smis)
 with st.sidebar:
     st.header("💻 War Room Terminal")
     layout_mode = st.radio("Display:", ["🖥️ Desktop", "📱 Mobile"])
-    if st.button("Refresh Data"): st.cache_data.clear()
+    if st.button("Refresh Data", type="primary"): st.cache_data.clear()
+    
+    # 🔥 เมนูคีย์ตัวเลข Manual Override 🔥
     st.markdown("---")
-    if "OANDA" in data_source:
-        st.success(f"✅ **Feed: {data_source}**\nเชื่อมต่อความเร็วสูง!")
-    else:
-        st.warning(f"⚠️ **Feed: {data_source}**\nTV บล็อกบน Cloud สลับใช้ระบบสำรองอัตโนมัติ")
+    st.subheader("✍️ Override ข่าวเศรษฐกิจ")
+    st.caption("รู้ตัวเลขก่อนเว็บ? คีย์ใส่ช่องด้านล่างแล้วกด Enter ได้เลย ระบบจะคำนวณแผน EA ใหม่ทันที!")
+    
+    has_pending = False
+    for ev in ff_events:
+        if ev['impact'] in ['High', 'Medium'] and ("Pending" in ev['actual'] or "Manual" in ev['gold_impact']):
+            has_pending = True
+            new_val = st.text_input(f"[{ev['time']}] {ev['title']}", value=st.session_state.manual_overrides.get(ev['title'], ""), placeholder="พิมพ์เช่น 210K หรือ -5.4 แล้ว Enter")
+            if new_val != st.session_state.manual_overrides.get(ev['title'], ""):
+                st.session_state.manual_overrides[ev['title']] = new_val
+                st.rerun()
+                
+    if not has_pending:
+        st.write("✅ ไม่มีข่าวสำคัญที่รอตัวเลขในขณะนี้")
+        
+    if st.button("🗑️ ล้างค่าที่คีย์เองทั้งหมด"):
+        st.session_state.manual_overrides = {}
+        st.rerun()
+        
+    st.markdown("---")
+    if "OANDA" in data_source: st.success(f"✅ **Feed: {data_source}**")
+    else: st.warning(f"⚠️ **Feed: {data_source}**")
 
 st.title("🦅 XAUUSD WAR ROOM: Terminal Master")
 
@@ -356,12 +343,7 @@ dxy_change = metrics['DXY'][1] if metrics else 0
 signal, reason, setup, ea_status, p_data, trend_str = calculate_hybrid_strategy(gold_df, absolute_max_smis, dxy_change, spdr_status)
 
 summary_text = get_executive_summary(metrics, spdr_status, absolute_max_smis, signal, ff_events, data_source)
-st.markdown(f"""
-<div class="summary-card">
-    <h4 style="margin-top:0; color:#00ffcc;">📊 Executive Market Summary (สรุปภาพรวมตลาด ณ ปัจจุบัน)</h4>
-    <p style="font-size: 16px; line-height: 1.6;">{summary_text}</p>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(f"""<div class="summary-card"><h4 style="margin-top:0; color:#00ffcc;">📊 Executive Market Summary (สรุปภาพรวมตลาด ณ ปัจจุบัน)</h4><p style="font-size: 16px; line-height: 1.6;">{summary_text}</p></div>""", unsafe_allow_html=True)
 
 col_plan, col_ea = st.columns([1, 1])
 
@@ -373,10 +355,7 @@ with col_plan:
         <div style="color:{sig_color}; font-size:24px; font-weight:bold; margin-top:10px;">{signal}</div>
         <p><b>Reason:</b> {reason}</p>
     """, unsafe_allow_html=True)
-    
-    if p_data:
-        st.markdown(f"""<div class="pillar-box"><b>The 5 Pillars Confluence:</b><br>• {p_data['P1']}<br>• {p_data['P2']}<br>• {p_data['P3']}<br>• {p_data['P4']}<br>• {p_data['P5']}</div>""", unsafe_allow_html=True)
-
+    if p_data: st.markdown(f"""<div class="pillar-box"><b>The 5 Pillars Confluence:</b><br>• {p_data['P1']}<br>• {p_data['P2']}<br>• {p_data['P3']}<br>• {p_data['P4']}<br>• {p_data['P5']}</div>""", unsafe_allow_html=True)
     if setup:
         c1, c2, c3 = st.columns(3)
         with c1: st.info(f"🎯 Entry: ${setup['Entry']:,.2f}")
@@ -386,38 +365,36 @@ with col_plan:
 
 with col_ea:
     st.markdown('<div class="ea-card">', unsafe_allow_html=True)
-    st.markdown(f"""
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h3 style="margin:0; color:#d4af37;">🤖 EA Commander (TumHybrid_v5.32)</h3>
-            <span style="color:#aaa; font-size:14px;">Max SMIS: <b>{absolute_max_smis:.1f}</b> / 10.0</span>
-        </div>
-    """, unsafe_allow_html=True)
-    
+    st.markdown(f"""<div style="display: flex; justify-content: space-between; align-items: center;"><h3 style="margin:0; color:#d4af37;">🤖 EA Commander (TumHybrid_v5.32)</h3><span style="color:#aaa; font-size:14px;">Max SMIS: <b>{absolute_max_smis:.1f}</b> / 10.0</span></div>""", unsafe_allow_html=True)
     ea_adv, ea_rsn, ea_css = get_ea_advice(trend_str, dxy_change, spdr_status, absolute_max_smis, signal)
-    
-    st.markdown(f"""
-    <div class="{ea_css}">
-        <div style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">{ea_adv}</div>
-        <div style="font-size: 14px; font-weight: normal; color: #ddd; line-height: 1.5;"><b>เหตุผลทาง Quant:</b><br>{ea_rsn}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="{ea_css}"><div style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">{ea_adv}</div><div style="font-size: 14px; font-weight: normal; color: #ddd; line-height: 1.5;"><b>เหตุผลทาง Quant:</b><br>{ea_rsn}</div></div>""", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.write("")
 
-tv_widget = f"""
+# --- ส่วนของการสร้างกราฟคู่ (GOLD และ DXY แก้ไขเป็น CAPITALCOM:DXY เพื่อไม่ให้ติดลิขสิทธิ์) ---
+tv_widget_gold = f"""
 <div class="tradingview-widget-container">
-  <div id="tradingview_chart"></div>
+  <div id="tv_gold"></div>
   <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
   <script type="text/javascript">
-  new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1"}});
+  new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});
+  </script>
+</div>
+"""
+
+tv_widget_dxy = f"""
+<div class="tradingview-widget-container">
+  <div id="tv_dxy"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
+  new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "CAPITALCOM:DXY", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_dxy"}});
   </script>
 </div>
 """
 
 def display_intelligence():
     st.subheader("📰 Global Intelligence & News")
-    
     if ff_events:
         st.write("**📅 ปฏิทินเศรษฐกิจ (กรองพิเศษ ลดสัญญาณรบกวน):**")
         for ev in ff_events:
@@ -442,17 +419,28 @@ def display_intelligence():
             </div>
             """, unsafe_allow_html=True)
 
+# --- จัดหน้าจอแบบมี Tabs ---
 if layout_mode == "🖥️ Desktop":
     col1, col2 = st.columns([1.8, 1])
-    with col1: st.components.v1.html(tv_widget, height=600)
-    with col2: display_intelligence()
+    with col1:
+        tab_gold, tab_dxy = st.tabs(["🥇 GOLD (XAUUSD)", "💵 DXY (US Dollar Index)"])
+        with tab_gold:
+            st.components.v1.html(tv_widget_gold, height=600)
+        with tab_dxy:
+            st.components.v1.html(tv_widget_dxy, height=600)
+    with col2:
+        display_intelligence()
 else:
-    st.components.v1.html(tv_widget, height=400)
+    tab_gold, tab_dxy = st.tabs(["🥇 GOLD", "💵 DXY"])
+    with tab_gold:
+        st.components.v1.html(tv_widget_gold, height=400)
+    with tab_dxy:
+        st.components.v1.html(tv_widget_dxy, height=400)
     display_intelligence()
 
 st.markdown("""
 <div class="footer-credits">
-    ⚙️ <b>Cloud Execution Node:</b> Precision Data Analytics<br>
+    ⚙️ <b>Hybrid Execution Node:</b> Precision Data Analytics<br>
     <i>"Survive the Variance, Execute on EV."</i>
 </div>
 """, unsafe_allow_html=True)
