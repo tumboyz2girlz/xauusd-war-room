@@ -35,7 +35,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. THE IMMORTAL DATA ENGINE (v4.7) ---
+# --- 2. THE IMMORTAL DATA ENGINE ---
 
 @st.cache_resource
 def init_tv():
@@ -137,9 +137,23 @@ def get_forexfactory_usd():
                     thai_dt = gmt_dt + datetime.timedelta(hours=7)
                 except: continue
 
+                # -----------------------------------------------------
+                # ⏳ THE DYNAMIC TIME FILTER (ลดสัญญาณรบกวน)
+                # -----------------------------------------------------
                 time_diff_hours = (thai_dt - now_thai).total_seconds() / 3600
-                if not (-12 <= time_diff_hours <= 24):
+                
+                # กฎ 12 ชั่วโมง: ถ้าข่าวผ่านไปเกิน 12 ชม. แล้ว ให้ตัดทิ้ง
+                if time_diff_hours < -12:
                     continue
+                    
+                # กฎล่วงหน้า (Look-ahead): แยกตามสีกล่อง
+                if impact == 'High':
+                    if time_diff_hours > 24: # กล่องแดง มองล่วงหน้า 24 ชม.
+                        continue
+                elif impact in ['Medium', 'Low']:
+                    if time_diff_hours > 4:  # กล่องส้มและเหลือง มองล่วงหน้าแค่ 4 ชม.
+                        continue
+                # -----------------------------------------------------
                 
                 thai_time_str = thai_dt.strftime("%d %b - %H:%M น.")
                 actual = event.find('actual').text if event.find('actual') is not None else "Pending"
@@ -325,7 +339,7 @@ with st.sidebar:
     if "OANDA" in data_source:
         st.success(f"✅ **Feed: {data_source}**\nเชื่อมต่อความเร็วสูง!")
     else:
-        st.warning(f"⚠️ **Feed: {data_source}**\nTV บล็อกบน Cloud สลับใช้ Yahoo สำเร็จ!")
+        st.warning(f"⚠️ **Feed: {data_source}**\nTV บล็อกบน Cloud สลับใช้ระบบสำรองอัตโนมัติ")
 
 st.title("🦅 XAUUSD WAR ROOM: Terminal Master")
 
@@ -405,7 +419,7 @@ def display_intelligence():
     st.subheader("📰 Global Intelligence & News")
     
     if ff_events:
-        st.write("**📅 ปฏิทินเศรษฐกิจ (24 ชม. ล่าสุด/ล่วงหน้า):**")
+        st.write("**📅 ปฏิทินเศรษฐกิจ (กรองพิเศษ ลดสัญญาณรบกวน):**")
         for ev in ff_events:
             border_color = "#ff3333" if ev['impact'] == 'High' else ("#ff9933" if ev['impact'] == 'Medium' else "#ffe066")
             st.markdown(f"""
