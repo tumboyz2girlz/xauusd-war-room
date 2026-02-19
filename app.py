@@ -35,7 +35,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. BULLETPROOF DATA ENGINE ---
+# --- 2. THE IMMORTAL DATA ENGINE (v4.7) ---
 
 @st.cache_resource
 def init_tv():
@@ -47,13 +47,14 @@ def init_tv():
 @st.cache_data(ttl=30)
 def get_market_data():
     metrics, gold_df = {}, None
-    data_source = "OANDA"
+    data_source = "OANDA (Direct)"
     
+    # ก๊อก 1: TradingView
     tv = init_tv()
     if tv is not None:
         try:
             temp_df = tv.get_hist(symbol='XAUUSD', exchange='OANDA', interval=Interval.in_15_minute, n_bars=200)
-            if temp_df is not None and not temp_df.empty and len(temp_df) > 2:
+            if temp_df is not None and not temp_df.empty and len(temp_df) > 55:
                 gold_df = temp_df
                 curr_gold = float(gold_df['close'].iloc[-1])
                 prev_gold = float(gold_df['close'].iloc[-2])
@@ -61,15 +62,23 @@ def get_market_data():
         except:
             gold_df = None
             
+    # ก๊อก 2, 3, 4: Yahoo Finance Fallbacks (ดึง 1 เดือนเต็ม เพื่อให้แท่งเทียนพอคำนวณ EMA50)
     if gold_df is None or gold_df.empty:
-        data_source = "Yahoo Finance (Fallback)"
+        data_source = "Yahoo Finance (Spot 15m)"
         try:
-            h = yf.Ticker("XAUUSD=X").history(period="5d", interval="15m")
-            if h is None or h.empty or len(h) < 10:
-                h = yf.Ticker("GC=F").history(period="5d", interval="15m")
-                data_source = "Yahoo Futures (Fallback)"
+            h = yf.Ticker("XAUUSD=X").history(period="1mo", interval="15m")
+            
+            # ก๊อก 3: ถ้า Spot ทองพัง ลองฟิวเจอร์ส
+            if h is None or h.empty or len(h) < 55:
+                h = yf.Ticker("GC=F").history(period="1mo", interval="15m")
+                data_source = "Yahoo Finance (Futures 15m)"
                 
-            if h is not None and not h.empty and len(h) > 2:
+            # ก๊อก 4: ถ้า 15 นาทีพังหมด ให้ดึง 1 ชั่วโมง
+            if h is None or h.empty or len(h) < 55:
+                h = yf.Ticker("XAUUSD=X").history(period="1mo", interval="1h")
+                data_source = "Yahoo Finance (Spot 1h Fallback)"
+                
+            if h is not None and not h.empty and len(h) > 55:
                 curr_gold = float(h['Close'].iloc[-1])
                 prev_gold = float(h['Close'].iloc[-2])
                 metrics['GOLD'] = (curr_gold, ((curr_gold - prev_gold) / prev_gold) * 100)
@@ -80,12 +89,12 @@ def get_market_data():
             metrics['GOLD'] = (0.0, 0.0)
 
     try:
-        h_dxy = yf.Ticker("DX-Y.NYB").history(period="5d", interval="15m")
+        h_dxy = yf.Ticker("DX-Y.NYB").history(period="1mo", interval="15m")
         metrics['DXY'] = (h_dxy['Close'].iloc[-1], ((h_dxy['Close'].iloc[-1]-h_dxy['Close'].iloc[-2])/h_dxy['Close'].iloc[-2])*100) if not h_dxy.empty else (0,0)
     except: metrics['DXY'] = (0,0)
 
     try:
-        h_tnx = yf.Ticker("^TNX").history(period="5d", interval="15m")
+        h_tnx = yf.Ticker("^TNX").history(period="1mo", interval="15m")
         metrics['US10Y'] = (h_tnx['Close'].iloc[-1], ((h_tnx['Close'].iloc[-1]-h_tnx['Close'].iloc[-2])/h_tnx['Close'].iloc[-2])*100) if not h_tnx.empty else (0,0)
     except: metrics['US10Y'] = (0,0)
     
@@ -94,7 +103,7 @@ def get_market_data():
 @st.cache_data(ttl=3600)
 def get_spdr_flow():
     try:
-        gld = yf.Ticker("GLD").history(period="5d", interval="1d")
+        gld = yf.Ticker("GLD").history(period="1mo", interval="1d")
         if not gld.empty and len(gld) > 1:
             if gld['Volume'].iloc[-1] > gld['Volume'].iloc[-2]:
                 return "Accumulation (เจ้าเก็บของ)" if gld['Close'].iloc[-1] > gld['Close'].iloc[-2] else "Distribution (เจ้าเทของ)"
@@ -210,7 +219,7 @@ def calculate_hybrid_strategy(df, absolute_max_smis, dxy_change, spdr_status):
         df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14) 
         last = df.iloc[-1]
         
-        if pd.isna(last['ema50']): return "CALCULATING...", "กำลังสะสมแท่งเทียนให้ครบ", {}, "WAIT", None, "WAIT"
+        if pd.isna(last['ema50']): return "CALCULATING...", "กำลังสะสมแท่งเทียนให้ครบ 50 แท่ง", {}, "WAIT", None, "WAIT"
 
         trend = "UP" if last['close'] > last['ema50'] else "DOWN"
         retail_sent = get_retail_sentiment(trend)
@@ -248,18 +257,16 @@ def calculate_hybrid_strategy(df, absolute_max_smis, dxy_change, spdr_status):
     except Exception as e: return "ERROR", f"Strategy Error: {str(e)}", {}, "WAIT", None, "WAIT"
 
 # --- 4. EXECUTIVE & EA ADVICE ENGINE ---
-# เพิ่มพารามิเตอร์ data_source เข้าไปใน Executive Summary
 def get_executive_summary(metrics, spdr, max_smis, signal, ff_events, data_source):
     if not metrics or 'GOLD' not in metrics or metrics['GOLD'][0] == 0:
-        return "กำลังรวบรวมข้อมูล..."
+        return "ระบบกำลังรวบรวมและวิเคราะห์ข้อมูลล่าสุด กรุณารอสักครู่..."
     
     gold_val, gold_pct = metrics['GOLD']
     dxy_val, dxy_pct = metrics['DXY']
     gold_dir = "ขยับขึ้น" if gold_pct >= 0 else "ย่อตัวลง"
     dxy_dir = "แข็งค่า" if dxy_pct >= 0 else "อ่อนค่า"
     
-    # พิมพ์ชื่อแหล่งข้อมูลที่ใช้บอกราคา (เช่น OANDA หรือ Yahoo)
-    gold_txt = f"**ราคาทองคำ (อ้างอิงจาก {data_source})** {gold_dir}อยู่ที่ระดับ ${gold_val:,.2f} ({'+' if gold_pct>0 else ''}{gold_pct:.2f}%)"
+    gold_txt = f"**ราคาทองคำ (อ้างอิง {data_source})** {gold_dir}อยู่ที่ระดับ ${gold_val:,.2f} ({'+' if gold_pct>0 else ''}{gold_pct:.2f}%)"
     dxy_txt = f"สวนทางกับ **ดัชนีดอลลาร์ (DXY)** ที่มีแนวโน้ม{dxy_dir} ({dxy_val:,.2f})"
     smis_txt = "มีความผันผวนสูงมาก (อันตราย)" if max_smis >= 8.5 else "มีความผันผวนระดับปานกลาง" if max_smis >= 5 else "สภาวะตลาดปกติ (ปลอดภัย)"
     
@@ -296,7 +303,7 @@ def get_ea_advice(trend, dxy_change, spdr_status, max_smis, signal):
         css_class = "ea-green"
     else:
         advice = "⏳ กำลังประมวลผลคำแนะนำ..."
-        reason = "รอข้อมูลอัปเดตจากตลาด"
+        reason = "รอข้อมูลอัปเดตจากตลาด กรุณารอสักครู่"
         css_class = "ea-warning"
         
     return advice, reason, css_class
@@ -311,16 +318,16 @@ max_news_smis = max([n['score'] for n in global_news]) if global_news else 0
 absolute_max_smis = max(max_ff_smis, max_news_smis)
 
 with st.sidebar:
-    st.header("💻 Local Station")
+    st.header("💻 War Room Terminal")
     layout_mode = st.radio("Display:", ["🖥️ Desktop", "📱 Mobile"])
     if st.button("Refresh Data"): st.cache_data.clear()
     st.markdown("---")
     if "OANDA" in data_source:
-        st.success(f"✅ **Feed: {data_source}**\nเชื่อมต่อตรงสำเร็จ!")
+        st.success(f"✅ **Feed: {data_source}**\nเชื่อมต่อความเร็วสูง!")
     else:
-        st.warning(f"⚠️ **Feed: {data_source}**\nTV บล็อก สลับใช้ Yahoo สำเร็จ!")
+        st.warning(f"⚠️ **Feed: {data_source}**\nTV บล็อกบน Cloud สลับใช้ Yahoo สำเร็จ!")
 
-st.title("🦅 XAUUSD WAR ROOM: Local Master")
+st.title("🦅 XAUUSD WAR ROOM: Terminal Master")
 
 if metrics:
     c1, c2, c3, c4 = st.columns(4)
@@ -334,7 +341,6 @@ st.markdown("---")
 dxy_change = metrics['DXY'][1] if metrics else 0
 signal, reason, setup, ea_status, p_data, trend_str = calculate_hybrid_strategy(gold_df, absolute_max_smis, dxy_change, spdr_status)
 
-# โยน Data Source เข้าไปในฟังก์ชัน Executive Summary
 summary_text = get_executive_summary(metrics, spdr_status, absolute_max_smis, signal, ff_events, data_source)
 st.markdown(f"""
 <div class="summary-card">
@@ -432,7 +438,7 @@ else:
 
 st.markdown("""
 <div class="footer-credits">
-    ⚙️ <b>Local Execution Node:</b> Precision Data by OANDA TradingView<br>
+    ⚙️ <b>Cloud Execution Node:</b> Precision Data Analytics<br>
     <i>"Survive the Variance, Execute on EV."</i>
 </div>
 """, unsafe_allow_html=True)
