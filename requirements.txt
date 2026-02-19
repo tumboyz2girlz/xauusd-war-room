@@ -6,3 +6,5 @@ feedparser
 requests
 textblob
 deep-translator
+tvdatafeed
+websocket-client
