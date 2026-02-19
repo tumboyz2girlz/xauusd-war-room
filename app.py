@@ -15,7 +15,6 @@ from tvDatafeed import TvDatafeed, Interval
 # --- 1. CONFIGURATION & MEMORY ---
 st.set_page_config(page_title="Kwaktong Local Station", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 
-# ระบบความจำสำหรับบันทึกตัวเลขข่าวแบบ Manual
 if 'manual_overrides' not in st.session_state:
     st.session_state.manual_overrides = {}
 
@@ -36,8 +35,6 @@ st.markdown("""
     .score-high {color: #ff3333; font-weight: bold;}
     .score-med {color: #ffcc00; font-weight: bold;}
     .score-low {color: #00ffcc; font-weight: bold;}
-    
-    /* ตกแต่ง Tabs สลับกราฟ */
     .stTabs [data-baseweb="tab-list"] {gap: 10px;}
     .stTabs [data-baseweb="tab"] {background-color: #1a1a2e; border-radius: 5px 5px 0 0; padding: 10px 20px;}
     .stTabs [aria-selected="true"] {background-color: #d4af37 !important; color: #000 !important; font-weight: bold;}
@@ -48,10 +45,8 @@ st.markdown("""
 
 @st.cache_resource
 def init_tv():
-    try:
-        return TvDatafeed(auto_login=False)
-    except:
-        return None
+    try: return TvDatafeed(auto_login=False)
+    except: return None
 
 @st.cache_data(ttl=30)
 def get_market_data():
@@ -66,18 +61,17 @@ def get_market_data():
                 curr_gold = float(gold_df['close'].iloc[-1])
                 prev_gold = float(gold_df['close'].iloc[-2])
                 metrics['GOLD'] = (curr_gold, ((curr_gold - prev_gold) / prev_gold) * 100)
-        except:
-            gold_df = None
+        except: gold_df = None
             
     if gold_df is None or gold_df.empty:
         data_source = "Yahoo Finance (Spot 15m)"
         try:
-            h = yf.Ticker("XAUUSD=X").history(period="1mo", interval="15m")
+            h = yf.Ticker("XAUUSD=X").history(period="5d", interval="15m")
             if h is None or h.empty or len(h) < 55:
-                h = yf.Ticker("GC=F").history(period="1mo", interval="15m")
+                h = yf.Ticker("GC=F").history(period="5d", interval="15m")
                 data_source = "Yahoo Finance (Futures 15m)"
             if h is None or h.empty or len(h) < 55:
-                h = yf.Ticker("XAUUSD=X").history(period="1mo", interval="1h")
+                h = yf.Ticker("XAUUSD=X").history(period="10d", interval="1h")
                 data_source = "Yahoo Finance (Spot 1h Fallback)"
                 
             if h is not None and not h.empty and len(h) > 55:
@@ -89,12 +83,12 @@ def get_market_data():
         except: metrics['GOLD'] = (0.0, 0.0)
 
     try:
-        h_dxy = yf.Ticker("DX-Y.NYB").history(period="1mo", interval="15m")
+        h_dxy = yf.Ticker("DX-Y.NYB").history(period="5d", interval="15m")
         metrics['DXY'] = (h_dxy['Close'].iloc[-1], ((h_dxy['Close'].iloc[-1]-h_dxy['Close'].iloc[-2])/h_dxy['Close'].iloc[-2])*100) if not h_dxy.empty else (0,0)
     except: metrics['DXY'] = (0,0)
 
     try:
-        h_tnx = yf.Ticker("^TNX").history(period="1mo", interval="15m")
+        h_tnx = yf.Ticker("^TNX").history(period="5d", interval="15m")
         metrics['US10Y'] = (h_tnx['Close'].iloc[-1], ((h_tnx['Close'].iloc[-1]-h_tnx['Close'].iloc[-2])/h_tnx['Close'].iloc[-2])*100) if not h_tnx.empty else (0,0)
     except: metrics['US10Y'] = (0,0)
     
@@ -115,11 +109,19 @@ def get_retail_sentiment(trend_direction):
     elif trend_direction == "DOWN": return "Retail is mostly LONG (70%) -> เราหาจังหวะ SHORT"
     else: return "Retail is Indecisive (50/50)"
 
-# --- ท่อดูด XML แบบแยกชิ้น (เพื่อให้รับ Manual Override ทันที) ---
+# 🔥 ปลอมตัวเป็น Google Chrome เพื่อกันโดนบล็อก 🔥
 @st.cache_data(ttl=300)
 def fetch_ff_xml():
     url = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
-    try: return ET.fromstring(requests.get(url, timeout=5).content)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return ET.fromstring(response.content)
+        return None
     except: return None
 
 def get_forexfactory_usd(manual_overrides):
@@ -145,7 +147,6 @@ def get_forexfactory_usd(manual_overrides):
 
             time_diff_hours = (thai_dt - now_thai).total_seconds() / 3600
             
-            # ⏳ THE DYNAMIC TIME FILTER
             if time_diff_hours < -12: continue
             if impact == 'High' and time_diff_hours > 24: continue
             elif impact in ['Medium', 'Low'] and time_diff_hours > 4: continue
@@ -154,7 +155,6 @@ def get_forexfactory_usd(manual_overrides):
             actual = event.find('actual').text if event.find('actual') is not None else "Pending"
             forecast = event.find('forecast').text if event.find('forecast') is not None else ""
             
-            # 🔥 MANUAL OVERRIDE LOGIC 🔥
             is_manual = False
             if title in manual_overrides and manual_overrides[title].strip() != "":
                 actual = manual_overrides[title].strip()
@@ -196,9 +196,12 @@ def get_global_news():
     all_news, current_time = [], time.time()
     translator = GoogleTranslator(source='en', target='th')
     
+    # 🔥 เพิ่ม User-Agent ให้ก๊อกข่าวเหมือนกัน
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'}
+    
     def process_feed(url, source_name, limit=6):
         try:
-            feed = feedparser.parse(requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).content)
+            feed = feedparser.parse(requests.get(url, headers=headers, timeout=5).content)
             for entry in feed.entries[:limit]:
                 try:
                     pub_time = mktime(entry.published_parsed)
@@ -303,7 +306,6 @@ with st.sidebar:
     layout_mode = st.radio("Display:", ["🖥️ Desktop", "📱 Mobile"])
     if st.button("Refresh Data", type="primary"): st.cache_data.clear()
     
-    # 🔥 เมนูคีย์ตัวเลข Manual Override 🔥
     st.markdown("---")
     st.subheader("✍️ Override ข่าวเศรษฐกิจ")
     st.caption("รู้ตัวเลขก่อนเว็บ? คีย์ใส่ช่องด้านล่างแล้วกด Enter ได้เลย ระบบจะคำนวณแผน EA ใหม่ทันที!")
@@ -339,11 +341,14 @@ if metrics:
 
 st.markdown("---")
 
+thai_time_now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+formatted_time = thai_time_now.strftime("%d/%m/%Y เวลา %H:%M น.")
+
 dxy_change = metrics['DXY'][1] if metrics else 0
 signal, reason, setup, ea_status, p_data, trend_str = calculate_hybrid_strategy(gold_df, absolute_max_smis, dxy_change, spdr_status)
 
 summary_text = get_executive_summary(metrics, spdr_status, absolute_max_smis, signal, ff_events, data_source)
-st.markdown(f"""<div class="summary-card"><h4 style="margin-top:0; color:#00ffcc;">📊 Executive Market Summary (สรุปภาพรวมตลาด ณ ปัจจุบัน)</h4><p style="font-size: 16px; line-height: 1.6;">{summary_text}</p></div>""", unsafe_allow_html=True)
+st.markdown(f"""<div class="summary-card"><h4 style="margin-top:0; color:#00ffcc;">📊 Executive Market Summary (อัปเดตล่าสุด ณ: {formatted_time})</h4><p style="font-size: 16px; line-height: 1.6;">{summary_text}</p></div>""", unsafe_allow_html=True)
 
 col_plan, col_ea = st.columns([1, 1])
 
@@ -372,7 +377,6 @@ with col_ea:
 
 st.write("")
 
-# --- ส่วนของการสร้างกราฟคู่ (GOLD และ DXY แก้ไขเป็น CAPITALCOM:DXY เพื่อไม่ให้ติดลิขสิทธิ์) ---
 tv_widget_gold = f"""
 <div class="tradingview-widget-container">
   <div id="tv_gold"></div>
@@ -419,7 +423,6 @@ def display_intelligence():
             </div>
             """, unsafe_allow_html=True)
 
-# --- จัดหน้าจอแบบมี Tabs ---
 if layout_mode == "🖥️ Desktop":
     col1, col2 = st.columns([1.8, 1])
     with col1:
