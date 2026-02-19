@@ -109,7 +109,6 @@ def get_retail_sentiment(trend_direction):
     elif trend_direction == "DOWN": return "Retail is mostly LONG (70%) -> เราหาจังหวะ SHORT"
     else: return "Retail is Indecisive (50/50)"
 
-# 🔥 ปลอมตัวเป็น Google Chrome เพื่อกันโดนบล็อก 🔥
 @st.cache_data(ttl=300)
 def fetch_ff_xml():
     url = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
@@ -132,7 +131,8 @@ def get_forexfactory_usd(manual_overrides):
     now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     
     for event in root.findall('event'):
-        if event.find('country').text == 'USD' and event.find('impact').text in ['High', 'Medium', 'Low']:
+        # 🔥 ตัด 'Low' ออกให้หมด กรองเอาแค่ High และ Medium 🔥
+        if event.find('country').text == 'USD' and event.find('impact').text in ['High', 'Medium']:
             date_str = event.find('date').text
             raw_time = event.find('time').text
             impact = event.find('impact').text
@@ -149,7 +149,7 @@ def get_forexfactory_usd(manual_overrides):
             
             if time_diff_hours < -12: continue
             if impact == 'High' and time_diff_hours > 24: continue
-            elif impact in ['Medium', 'Low'] and time_diff_hours > 4: continue
+            elif impact == 'Medium' and time_diff_hours > 4: continue
             
             thai_time_str = thai_dt.strftime("%d %b - %H:%M น.")
             actual = event.find('actual').text if event.find('actual') is not None else "Pending"
@@ -160,7 +160,7 @@ def get_forexfactory_usd(manual_overrides):
                 actual = manual_overrides[title].strip()
                 is_manual = True
             
-            base_smis = 8.0 if impact == 'High' else (5.0 if impact == 'Medium' else 2.0)
+            base_smis = 8.0 if impact == 'High' else 5.0
             gold_impact = "⏳ รอดูตัวเลข (Pending)"
             surprise_factor = 0
 
@@ -196,7 +196,6 @@ def get_global_news():
     all_news, current_time = [], time.time()
     translator = GoogleTranslator(source='en', target='th')
     
-    # 🔥 เพิ่ม User-Agent ให้ก๊อกข่าวเหมือนกัน
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'}
     
     def process_feed(url, source_name, limit=6):
