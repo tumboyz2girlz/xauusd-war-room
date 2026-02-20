@@ -393,4 +393,10 @@ else:
     with tab_chart_dxy: st.components.v1.html(tv_dxy, height=400)
     display_intelligence()
 
-st.markdown("<div class='footer-credits'>⚙️ <b>Institutional Master Node:</b> Powered by MT5 Firebase Bridge (Live Sync)</div>", unsafe_allow_html=True)
+st.write("---")
+st.markdown("""
+<div style='text-align: center; padding: 20px; color: #888; font-size: 13px;'>
+    ⚙️ <b>Institutional Master Node:</b> Powered by MT5 Firebase Bridge (Live Sync)<br>
+    👨‍💻 Developed with 🔥 by <b>tumboyz2girlz</b> & <b>กวักทอง (Quant CTO)</b>
+</div>
+""", unsafe_allow_html=True)
