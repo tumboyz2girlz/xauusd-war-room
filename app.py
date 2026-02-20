@@ -13,7 +13,7 @@ from time import mktime
 from streamlit_autorefresh import st_autorefresh
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v8.3", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v8.4", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 
 # 🌟 สั่งให้หน้าเว็บกระพริบอัปเดตตัวเองอัตโนมัติ ทุกๆ 60 วินาที 🌟
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
@@ -117,6 +117,7 @@ def get_trading_session():
     elif 7 <= hour_utc < 13: return "🇬🇧 London Session", "สภาพคล่องปานกลางถึงสูง - กราฟเริ่มเลือกทาง", "#554433"
     else: return "🇺🇸 New York Session", "สภาพคล่องสูงสุด (High Volatility) - ระวังสวิงแรง / รันเทรนด์ได้", "#224422"
 
+# 🌟 ฟังก์ชันโหลดข้อมูลข่าว (ป้องกันโดนบล็อก IP)
 @st.cache_data(ttl=900)
 def fetch_ff_xml():
     url = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
@@ -144,7 +145,9 @@ def get_forexfactory_usd(manual_overrides):
                 thai_dt = gmt_dt + datetime.timedelta(hours=7)
                 time_diff_hours = (thai_dt - now_thai).total_seconds() / 3600
                 
-                if time_diff_hours < -2.0 or (impact == 'High' and time_diff_hours > 24) or (impact == 'Medium' and time_diff_hours > 4): continue
+                # 🌟 อัปเดต: ค้างข่าวไว้บนกระดาน 12 ชั่วโมง (-12.0)
+                if time_diff_hours < -12.0 or (impact == 'High' and time_diff_hours > 24) or (impact == 'Medium' and time_diff_hours > 4): continue
+                
                 if impact == 'High' and 0 < time_diff_hours <= 3:
                     if next_red_news is None or time_diff_hours < next_red_news['hours']:
                         next_red_news = {'title': title, 'hours': time_diff_hours, 'time': thai_dt.strftime("%H:%M น.")}
@@ -256,7 +259,7 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_
 
     smc_found, smc_entry, smc_sl, smc_tp = get_smc_setup(df_m15, trend_m15)
 
-    # 🛑 สร้างข้อความเตือนภัยข่าว (Human-in-the-Loop Override)
+    # 🛑 สร้างข้อความเตือนภัยข่าว 🛑
     news_warning_msg = ""
     if next_red_news and next_red_news['hours'] <= 2.0:
         news_warning_msg = f"""
@@ -283,7 +286,7 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_
             signal = "LONG (SMC + 5 Pillars Aligned)"
             reason = "โครงสร้าง 5 Pillars สนับสนุนขาขึ้น (DXY อ่อนค่า) ผสานระบบดักซุ่มยิงจุดเข้าด้วย SMC"
         
-        reason += news_warning_msg # แนบคำเตือนต่อท้ายเหตุผล
+        reason += news_warning_msg
         if smc_found: setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
         else: setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val - (2*atr_val):.2f}", 'TP': f"${ema_val + (2*atr_val):.2f}"}
     
@@ -292,15 +295,15 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_
             signal = "WAIT (War Override ⚠️)"
             reason = "โครงสร้าง Technical สั่ง SHORT แต่ความตึงเครียดสงครามพุ่งสูงปรี๊ด! ระบบสั่งระงับการแทงลง (ห้าม Short ทองคำสวนทางสงครามเด็ดขาด!)"
             setup = {}
-            reason += news_warning_msg # แนบคำเตือนต่อท้ายเหตุผล
+            reason += news_warning_msg
         else:
             signal = "SHORT (SMC + 5 Pillars Aligned)"
             reason = "โครงสร้าง 5 Pillars สนับสนุนขาลง (DXY แข็งค่า) ผสานระบบดักซุ่มยิงจุดเข้าด้วย SMC"
-            reason += news_warning_msg # แนบคำเตือนต่อท้ายเหตุผล
+            reason += news_warning_msg
             if smc_found: setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
             else: setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val + (2*atr_val):.2f}", 'TP': f"${ema_val - (2*atr_val):.2f}"}
     else:
-        reason += news_warning_msg # แนบคำเตือนต่อท้ายให้โหมด WAIT ธรรมดาด้วย
+        reason += news_warning_msg
         
     return signal, reason, setup, trend_h4, is_flash_crash
 
@@ -310,10 +313,8 @@ ff_events, max_ff_smis, next_red_news = get_forexfactory_usd(st.session_state.ma
 pol_news, war_news = get_categorized_news()
 dxy_change = metrics['DXY'][1] if metrics else 0
 
-# คำนวณคะแนนสงครามสูงสุดเพื่อส่งให้สมองกล
 max_war_score = max([news['score'] for news in war_news]) if war_news else 0.0
 
-# 🌟 สร้างตัวแปรบอกเวลา 🌟
 now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
 timestamp_str = now_thai.strftime("%d %b %Y | %H:%M:%S น.")
 
@@ -331,7 +332,8 @@ with st.sidebar:
     has_pending = False
     
     for i, ev in enumerate(ff_events):
-        if ev['impact'] in ['High', 'Medium'] and -2.0 <= ev.get('time_diff_hours', 0) <= 24.0:
+        # 🌟 อัปเดต: ค้างกล่องให้พิมพ์ตัวเลขไว้ 12 ชั่วโมงหลังข่าวออก
+        if ev['impact'] in ['High', 'Medium'] and -12.0 <= ev.get('time_diff_hours', 0) <= 24.0:
             if "Pending" in ev['actual']: has_pending = True
             new_val = st.text_input(f"[{ev['time']}] {ev['title']}", value=st.session_state.manual_overrides.get(ev['title'], ""), key=f"override_news_{i}")
             if new_val != st.session_state.manual_overrides.get(ev['title'], ""):
@@ -343,7 +345,7 @@ with st.sidebar:
         st.session_state.manual_overrides = {}
         st.rerun()
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Edition v8.3")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Edition v8.4")
 
 if metrics and 'GOLD' in metrics:
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -366,13 +368,11 @@ if next_red_news:
 
 st.markdown("---")
 
-# โยนข้อมูลข่าวและสงครามเข้าไปประมวลผลร่วมกับ SMC และ Technical
 signal, reason, setup, trend_h4, is_flash_crash = calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_war_score)
 
 col_plan, col_ea = st.columns([1, 1])
 
 with col_plan:
-    # กำหนดสีให้สวยงามตามสถานะที่ฉลาดขึ้น
     sig_color = "#ff00ff" if is_flash_crash else ("#ffcc00" if "WAIT" in signal else ("#00ff00" if "LONG" in signal else "#ff3333"))
     
     st.markdown(f"""
