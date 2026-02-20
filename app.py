@@ -170,7 +170,7 @@ def get_categorized_news():
 
 def calculate_institutional_setup(df_m15, df_h4, dxy_change):
     if df_m15 is None or df_h4 is None or len(df_m15) < 55 or len(df_h4) < 55: 
-        return "WAIT", "รอข้อมูลราคาทองคำจากเซิร์ฟเวอร์ (กำลังซิงค์...)", {}, "UNKNOWN"
+        return "WAIT", "รอข้อมูลราคาทองคำจากเซิร์ฟเวอร์ (กำลังซิงค์...)", {}, "UNKNOWN", False
     
     df_h4['ema50'] = ta.ema(df_h4['close'], length=50)
     h4_closed = df_h4.iloc[-2]
@@ -178,15 +178,38 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change):
 
     df_m15['ema50'] = ta.ema(df_m15['close'], length=50)
     df_m15['atr'] = ta.atr(df_m15['high'], df_m15['low'], df_m15['close'], length=14)
+    m15_current = df_m15.iloc[-1]
     m15_closed = df_m15.iloc[-2]
     trend_m15 = "UP" if m15_closed['close'] > m15_closed['ema50'] else "DOWN"
     
     atr_val = m15_closed['atr']
     ema_val = m15_closed['ema50']
 
+    # 🚨 ANTI-DUMP SENSOR (Tuned for $15+ Solid Red Candle) 🚨
+    current_open = float(m15_current['open'])
+    current_price = float(m15_current['close']) 
+    current_low = float(m15_current['low'])
+
+    # 1. วัดขนาดเนื้อเทียนสีแดง (ต้องลงมาลึกเกิน 15 เหรียญ)
+    red_body_size = current_open - current_price
+    
+    # 2. เช็คว่าเป็น "แดงเต็มแท่ง" ไหม? (ราคาปัจจุบันต้องอยู่ใกล้ Low ห่างกันไม่เกิน 3 เหรียญ)
+    is_full_body = (current_price - current_low) <= 3.0
+
+    # ทริกเกอร์จะทำงานเมื่อ: ร่วงเกิน 15 เหรียญ + ไม่มีไส้ล่างยาวๆ ดึงกลับ
+    is_flash_crash = True if (red_body_size >= 15.0) and is_full_body else False
+
     signal, reason, setup = "WAIT (Fold)", f"H1/H4 Trend ({trend_h4}) ไม่ตรงกับ M15 ({trend_m15}) หรือ DXY ขัดแย้ง", {}
 
-    if trend_h4 == "UP" and trend_m15 == "UP" and dxy_change <= 0:
+    if is_flash_crash:
+        signal = "🚨 FLASH CRASH (SELL NOW!)"
+        reason = f"เซ็นเซอร์จับวาฬทำงาน! พบการเทขายแดงเต็มแท่ง (Solid Bearish) ดิ่งลงมาแล้ว ${red_body_size:.2f} สั่งระงับ EA Buy ทันที! และพิจารณาเข้าแทง SELL ตามน้ำเพื่อขี่คลื่นวาฬ!"
+        setup = {
+            'Entry': f"กด Sell (Market) ทันที หรือรอเด้งโซน ${current_price + (0.5*atr_val):.2f}",
+            'SL': f"${current_open + (0.5*atr_val):.2f} (เหนือโซนที่วาฬเริ่มทุบ)",
+            'TP': f"${current_price - (3*atr_val):.2f} ถึง ${current_price - (6*atr_val):.2f} (รันเทรนด์ลง)"
+        }
+    elif trend_h4 == "UP" and trend_m15 == "UP" and dxy_change <= 0:
         signal = "LONG (Dual-TF Aligned)"
         reason = "โครงสร้างสถาบัน: เทรนด์ใหญ่(H1) ขึ้น + ย่อย(M15) ขึ้น + DXY อ่อนค่า เอื้อต่อการยิงโซน Buy"
         setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f}", 'SL': f"${ema_val - (2*atr_val):.2f} (เด็ดขาด)", 'TP': f"${ema_val + (2*atr_val):.2f} ถึง ${ema_val + (4*atr_val):.2f}"}
@@ -195,7 +218,7 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change):
         reason = "โครงสร้างสถาบัน: เทรนด์ใหญ่(H1) ลง + ย่อย(M15) ลง + DXY แข็งค่า เอื้อต่อการยิงโซน Sell"
         setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f}", 'SL': f"${ema_val + (2*atr_val):.2f} (เด็ดขาด)", 'TP': f"${ema_val - (2*atr_val):.2f} ถึง ${ema_val - (4*atr_val):.2f}"}
         
-    return signal, reason, setup, trend_h4
+    return signal, reason, setup, trend_h4, is_flash_crash
 
 # --- 5. UI DASHBOARD ---
 metrics, df_m15, df_h4, data_source = get_market_data()
@@ -254,35 +277,42 @@ if next_red_news:
 
 st.markdown("---")
 
-signal, reason, setup, trend_h4 = calculate_institutional_setup(df_m15, df_h4, dxy_change)
+signal, reason, setup, trend_h4, is_flash_crash = calculate_institutional_setup(df_m15, df_h4, dxy_change)
 
 col_plan, col_ea = st.columns([1, 1])
 
 with col_plan:
-    sig_color = "#00ff00" if "LONG" in signal else "#ff3333" if "SHORT" in signal else "#ffcc00"
+    sig_color = "#ff00ff" if is_flash_crash else ("#00ff00" if "LONG" in signal else "#ff3333" if "SHORT" in signal else "#ffcc00")
+    
     st.markdown(f"""
-    <div class="plan-card">
-        <h3 style="margin:0; color:#00ccff;">🃏 Institutional Manual Trade</h3>
+    <div class="plan-card" style="{ 'border-color: #ff00ff;' if is_flash_crash else '' }">
+        <h3 style="margin:0; color:{'#ff00ff' if is_flash_crash else '#00ccff'};">🃏 Institutional Manual Trade</h3>
         <div style="font-size:12px; color:#aaa; margin-top:5px;">🕒 ประมวลผลล่าสุด: {timestamp_str}</div>
         <div style="color:{sig_color}; font-size:24px; font-weight:bold; margin-top:10px;">{signal}</div>
         <p><b>Logic:</b> {reason}</p>
     """, unsafe_allow_html=True)
+    
     if setup:
+        box_border = "#ff00ff" if is_flash_crash else "#444"
+        title_color = "#ff00ff" if is_flash_crash else "#00ccff"
         st.markdown(f"""
-        <div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid #444;">
-            <div style="color:#00ccff; font-weight:bold; margin-bottom:5px;">🎯 Dynamic Zones (อ้างอิงราคาจริงจาก MT5 ของท่าน):</div>
-            <div style="margin-bottom:5px;">📍 <b>Entry Zone:</b> กระจายไม้ในโซน {setup['Entry']}</div>
+        <div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid {box_border};">
+            <div style="color:{title_color}; font-weight:bold; margin-bottom:5px;">🎯 Dynamic Zones {'(REVENGE SHORT 🦈)' if is_flash_crash else ''}:</div>
+            <div style="margin-bottom:5px;">📍 <b>Entry Zone:</b> {setup['Entry']}</div>
             <div style="margin-bottom:5px; color:#ff4444;">🛑 <b>Stoploss:</b> ยอมแพ้เด็ดขาดที่ {setup['SL']}</div>
-            <div style="color:#00ff00;">💰 <b>TP Zone:</b> รินขายทำกำไรในโซน {setup['TP']}</div>
+            <div style="color:#00ff00;">💰 <b>TP Zone:</b> {setup['TP']}</div>
             <div style="margin-top:10px; font-size:12px; color:#aaa;">*ขนาด Lot ให้อ้างอิงตามระยะ SL และความเสี่ยงที่รับได้ของพอร์ตตัวเอง</div>
         </div>
         """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 with col_ea:
-    st.markdown('<div class="ea-card">', unsafe_allow_html=True)
+    st.markdown(f'<div class="ea-card" style="{ "border-color: #ff3333;" if is_flash_crash else "" }">', unsafe_allow_html=True)
     st.markdown(f"""<h3 style="margin:0; color:#d4af37;">🤖 EA Commander (TumHybrid_v5.32)</h3>""", unsafe_allow_html=True)
-    if max_ff_smis >= 8.5 or next_red_news:
+    
+    if is_flash_crash:
+        st.markdown(f"""<div class="ea-red"><div style="font-size: 18px; font-weight: bold; color: #ff3333;">🚨 EMERGENCY: ปิด AUTO TRADING ทันที!</div><div style="font-size: 14px; margin-top:5px;">เซ็นเซอร์ Anti-Dump ทำงาน! วาฬกำลังทุบตลาด ห้าม EA กาง Buy Grid สวนเด็ดขาด ให้พิจารณากดมือเข้าไม้ SELL ตามกรอบด้านซ้ายมือแทน!</div></div>""", unsafe_allow_html=True)
+    elif max_ff_smis >= 8.5 or next_red_news:
         st.markdown(f"""<div class="ea-red"><div style="font-size: 18px; font-weight: bold;">🛑 พิจารณาปิด Auto Trading (Force Pause EA)</div><div style="font-size: 14px; margin-top:5px;">ความผันผวนจากข่าวสูง/ใกล้เวลาข่าวออก เสี่ยงเกิด Whipsaw กวาด Grid</div></div>""", unsafe_allow_html=True)
     elif "WAIT" in signal:
         st.markdown(f"""<div class="ea-warning"><div style="font-size: 18px; font-weight: bold;">⚠️ ระวังการกาง Grid / เตรียมแทรกแซง</div><div style="font-size: 14px; margin-top:5px;">เทรนด์ใหญ่และย่อยขัดแย้งกัน หาก EA ฝืนกาง Grid ให้เฝ้าระวังพอร์ตโดนลาก</div></div>""", unsafe_allow_html=True)
@@ -297,106 +327,10 @@ st.write("---")
 # 🌟 อาวุธใหม่: Market Sentiment Gauge พร้อมคู่มือการอ่านค่า 🌟
 st.markdown("### 🧭 Market Sentiment (มาตรวัดอารมณ์ตลาดรวม)")
 
-# กล่องคู่มือการใช้งาน (Trading Playbook)
 st.markdown("""
 <div style="background-color:#1a1a2e; padding:15px; border-radius:8px; border-left: 5px solid #00ccff; margin-bottom: 20px;">
     <h4 style="margin-top:0; color:#00ccff;">💡 คู่มือการอ่านหน้าปัด (Trading Playbook)</h4>
     <p style="margin-bottom:5px; color:#ddd;"><b>1. ดูสมองกลหลัก (MT5):</b> ดูกล่อง <i>Institutional Manual Trade</i> ด้านบนเป็นหลัก ถ้าระบบขึ้น <b>LONG</b> หรือ <b>SHORT</b> พร้อมให้โซนราคามา แปลว่าโครงสร้างกราฟและ DXY เป็นใจแล้ว</p>
     <p style="margin-bottom:5px; color:#ddd;"><b>2. ใช้หน้าปัดเป็น "น้ำหนักความมั่นใจ":</b></p>
     <ul style="margin-top:0; color:#ddd;">
-        <li>🟢 <b>ทิศทางสอดคล้องกัน (เช่น สมองกลบอก LONG + หน้าปัดชี้ Strong Buy):</b> <i>เหยียบคันเร่ง!</i> ออกหลอดตามปกติ หรือปล่อย EA รันเต็มสูบได้เลย</li>
-        <li>🟡 <b>ทิศทางขัดแย้งกัน (เช่น สมองกลบอก LONG + แต่หน้าปัดชี้ Sell / Neutral):</b> <i>ชะลอความเร็ว!</i> เข้าไม้เบาลง (ลด Lot) หรือแคบระยะ TP ให้สั้นลง เพราะโมเมนตัมจาก 26 อินดิเคเตอร์เริ่มหมดแรงแล้ว</li>
-    </ul>
-</div>
-""", unsafe_allow_html=True)
-
-c_gauge1, c_gauge2 = st.columns(2)
-with c_gauge1:
-    st.components.v1.html("""
-    <div class="tradingview-widget-container">
-      <div class="tradingview-widget-container__widget"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js" async>
-      {
-      "interval": "15m",
-      "width": "100%",
-      "isTransparent": true,
-      "height": "400",
-      "symbol": "OANDA:XAUUSD",
-      "showIntervalTabs": true,
-      "displayMode": "single",
-      "locale": "th",
-      "colorTheme": "dark"
-      }
-      </script>
-    </div>
-    """, height=400)
-with c_gauge2:
-    st.components.v1.html("""
-    <div class="tradingview-widget-container">
-      <div class="tradingview-widget-container__widget"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js" async>
-      {
-      "interval": "1h",
-      "width": "100%",
-      "isTransparent": true,
-      "height": "400",
-      "symbol": "OANDA:XAUUSD",
-      "showIntervalTabs": true,
-      "displayMode": "single",
-      "locale": "th",
-      "colorTheme": "dark"
-      }
-      </script>
-    </div>
-    """, height=400)
-
-st.write("---")
-
-tv_gold = f"""<div class="tradingview-widget-container"><div id="tv_gold"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});</script></div>"""
-tv_dxy = f"""<div class="tradingview-widget-container"><div id="tv_dxy"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "CAPITALCOM:DXY", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_dxy"}});</script></div>"""
-
-def display_intelligence():
-    st.subheader("📰 Global Intelligence Hub")
-    tab_eco, tab_pol, tab_war = st.tabs(["📅 ข่าวเศรษฐกิจ", "🏛️ การเมือง & Fed", "⚔️ สงคราม"])
-    
-    with tab_eco:
-        if ff_events:
-            for ev in ff_events:
-                border_color = "#ff3333" if ev['impact'] == 'High' else "#ff9933"
-                st.markdown(f"<div class='ff-card' style='border-left-color: {border_color};'>⚡ [{ev['time']}] <b>{ev['title']}</b><br><span style='color:#aaa; font-size:13px;'>Forecast: {ev['forecast']} | <span style='color:#ffcc00;'>Actual: {ev['actual']}</span></span><br>🔥 SMIS: {ev['smis']}/10</div>", unsafe_allow_html=True)
-        else: st.write("ไม่มีข่าวเศรษฐกิจสำคัญในช่วงนี้")
-            
-    with tab_pol:
-        if pol_news:
-            for news in pol_news:
-                score_class = "score-high" if news['score'] >= 8 else "score-med" if news['score'] >= 5 else "score-low"
-                st.markdown(f"<div class='news-card'><div style='font-size:15px; font-weight:bold;'><a href='{news['link']}' target='_blank' style='color:#ffffff; text-decoration:none;'>🇺🇸 {news['title_th']}</a></div><div style='font-size:12px; color:#aaa; font-style:italic;'>{news['title_en']}</div><div style='margin-top:5px; font-size:11px; color:#00ccff;'>🕒 {news['time']} | 🔥 SMIS Impact: <span class='{score_class}'>{news['score']:.1f}/10</span></div></div>", unsafe_allow_html=True)
-        else: st.write("กำลังรวบรวมข่าวการเมือง...")
-            
-    with tab_war:
-        if war_news:
-            for news in war_news:
-                score_class = "score-high" if news['score'] >= 8 else "score-med" if news['score'] >= 5 else "score-low"
-                st.markdown(f"<div class='news-card' style='border-left-color: #ff3333;'><div style='font-size:15px; font-weight:bold;'><a href='{news['link']}' target='_blank' style='color:#ffffff; text-decoration:none;'>⚠️ {news['title_th']}</a></div><div style='font-size:12px; color:#aaa; font-style:italic;'>{news['title_en']}</div><div style='margin-top:5px; font-size:11px; color:#00ccff;'>🕒 {news['time']} | 🔥 SMIS Impact: <span class='{score_class}'>{news['score']:.1f}/10</span></div></div>", unsafe_allow_html=True)
-        else: st.write("กำลังรวบรวมข่าวภูมิรัฐศาสตร์...")
-
-if layout_mode == "🖥️ Desktop":
-    col1, col2 = st.columns([1.8, 1])
-    with col1:
-        tab_chart_gold, tab_chart_dxy = st.tabs(["🥇 XAUUSD", "💵 DXY"])
-        with tab_chart_gold: st.components.v1.html(tv_gold, height=600)
-        with tab_chart_dxy: st.components.v1.html(tv_dxy, height=600)
-    with col2: display_intelligence()
-else:
-    tab_chart_gold, tab_chart_dxy = st.tabs(["🥇 XAUUSD", "💵 DXY"])
-    with tab_chart_gold: st.components.v1.html(tv_gold, height=400)
-    with tab_chart_dxy: st.components.v1.html(tv_dxy, height=400)
-    display_intelligence()
-
-st.write("---")
-st.markdown("""
-<div style='text-align: center; padding: 20px; color: #888; font-size: 13px;'>
-    ⚙️ <b>Institutional Master Node:</b> Powered by MT5 Firebase Bridge (Live Sync)<br>
-    👨‍💻 Developed with 🔥 by <b>tumboyz2girlz</b> & <b>กวักทอง (Quant CTO)</b>
-</div>
-""", unsafe_allow_html=True)
+        <li>🟢 <b>ทิศทางสอดคล้องกัน (เช่น สมองกลบอก LONG + หน้าปัดชี้ Strong Buy):</b> <i>เหยียบคันเร่ง!</i> ออกหลอดตามปกติ หรือปล่อย EA รันเต็มสูบได้เ
