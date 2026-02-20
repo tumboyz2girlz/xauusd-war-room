@@ -13,7 +13,7 @@ from time import mktime
 from streamlit_autorefresh import st_autorefresh
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v8.1", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 
 # 🌟 สั่งให้หน้าเว็บกระพริบอัปเดตตัวเองอัตโนมัติ ทุกๆ 60 วินาที 🌟
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
@@ -118,7 +118,7 @@ def get_trading_session():
     elif 7 <= hour_utc < 13: return "🇬🇧 London Session", "สภาพคล่องปานกลางถึงสูง - กราฟเริ่มเลือกทาง", "#554433"
     else: return "🇺🇸 New York Session", "สภาพคล่องสูงสุด (High Volatility) - ระวังสวิงแรง / รันเทรนด์ได้", "#224422"
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=900) # ปรับเป็น 15 นาทีลดการโดนบล็อก IP
 def get_forexfactory_usd(manual_overrides):
     url = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -189,19 +189,63 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change):
     m15_closed = df_m15.iloc[-2]
     trend_m15 = "UP" if m15_closed['close'] > m15_closed['ema50'] else "DOWN"
     
-    atr_val = m15_closed['atr']
-    ema_val = m15_closed['ema50']
+    atr_val = float(m15_closed['atr'])
+    ema_val = float(m15_closed['ema50'])
 
-    # 🚨 ANTI-DUMP SENSOR (Tuned for $15+ Solid Red Candle) 🚨
+    # 🚨 ANTI-DUMP SENSOR (Flash Crash) 🚨
     current_open = float(m15_current['open'])
     current_price = float(m15_current['close']) 
     current_low = float(m15_current['low'])
 
     red_body_size = current_open - current_price
     is_full_body = (current_price - current_low) <= 3.0
-
     is_flash_crash = True if (red_body_size >= 15.0) and is_full_body else False
 
+    # 🧲 SMC ENGINE (Smart Money Concepts: FVG & Liquidity) 🧲
+    def get_smc_setup(df, trend_dir):
+        df_recent = df.tail(40).reset_index(drop=True)
+        atr_smc = df_recent['atr'].iloc[-1]
+        
+        found = False
+        e_msg, s_msg, t_msg = "", "", ""
+        
+        if trend_dir == "UP":
+            # หา Bullish FVG: Low ของแท่งปัจจุบัน > High ของ 2 แท่งที่แล้ว
+            for i in range(len(df_recent)-1, 1, -1):
+                low_3 = float(df_recent['low'].iloc[i])
+                high_1 = float(df_recent['high'].iloc[i-2])
+                if low_3 > high_1: # เจอ FVG ขาขึ้น
+                    fvg_bot = high_1
+                    fvg_top = low_3
+                    sl_price = float(df_recent['low'].iloc[i-2]) - (atr_smc * 0.5)
+                    tp_price = float(df_recent['high'].max())
+                    
+                    e_msg = f"🧲 รอราคาย่อเข้า Demand FVG โซน ${fvg_bot:.2f} ถึง ${fvg_top:.2f}"
+                    s_msg = f"${sl_price:.2f} (ซ่อนใต้แท่ง Order Block ต้นทาง)"
+                    t_msg = f"${tp_price:.2f} (กวาด Buy-Side Liquidity 🎯)"
+                    found = True
+                    break
+        elif trend_dir == "DOWN":
+            # หา Bearish FVG: High ของแท่งปัจจุบัน < Low ของ 2 แท่งที่แล้ว
+            for i in range(len(df_recent)-1, 1, -1):
+                high_3 = float(df_recent['high'].iloc[i])
+                low_1 = float(df_recent['low'].iloc[i-2])
+                if high_3 < low_1: # เจอ FVG ขาลง
+                    fvg_top = low_1
+                    fvg_bot = high_3
+                    sl_price = float(df_recent['high'].iloc[i-2]) + (atr_smc * 0.5)
+                    tp_price = float(df_recent['low'].min())
+                    
+                    e_msg = f"🧲 รอราคาเด้งเข้า Supply FVG โซน ${fvg_bot:.2f} ถึง ${fvg_top:.2f}"
+                    s_msg = f"${sl_price:.2f} (ซ่อนเหนือแท่ง Order Block ต้นทาง)"
+                    t_msg = f"${tp_price:.2f} (กวาด Sell-Side Liquidity 🎯)"
+                    found = True
+                    break
+        return found, e_msg, s_msg, t_msg
+
+    smc_found, smc_entry, smc_sl, smc_tp = get_smc_setup(df_m15, trend_m15)
+
+    # 🌐 ประมวลผลขั้นสุดท้าย (5 Pillars Macro + SMC) 🌐
     signal, reason, setup = "WAIT (Fold)", f"H1/H4 Trend ({trend_h4}) ไม่ตรงกับ M15 ({trend_m15}) หรือ DXY ขัดแย้ง", {}
 
     if is_flash_crash:
@@ -213,13 +257,19 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change):
             'TP': f"${current_price - (3*atr_val):.2f} ถึง ${current_price - (6*atr_val):.2f} (รันเทรนด์ลง)"
         }
     elif trend_h4 == "UP" and trend_m15 == "UP" and dxy_change <= 0:
-        signal = "LONG (Dual-TF Aligned)"
-        reason = "โครงสร้างสถาบัน: เทรนด์ใหญ่(H1) ขึ้น + ย่อย(M15) ขึ้น + DXY อ่อนค่า เอื้อต่อการยิงโซน Buy"
-        setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f}", 'SL': f"${ema_val - (2*atr_val):.2f} (เด็ดขาด)", 'TP': f"${ema_val + (2*atr_val):.2f} ถึง ${ema_val + (4*atr_val):.2f}"}
+        signal = "LONG (SMC + 5 Pillars Aligned)"
+        reason = "โครงสร้าง 5 Pillars สนับสนุนขาขึ้น (DXY อ่อนค่า) ผสานระบบดักซุ่มยิงด้วย SMC"
+        if smc_found:
+            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
+        else:
+            setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val - (2*atr_val):.2f} (เด็ดขาด)", 'TP': f"${ema_val + (2*atr_val):.2f} ถึง ${ema_val + (4*atr_val):.2f}"}
     elif trend_h4 == "DOWN" and trend_m15 == "DOWN" and dxy_change >= 0:
-        signal = "SHORT (Dual-TF Aligned)"
-        reason = "โครงสร้างสถาบัน: เทรนด์ใหญ่(H1) ลง + ย่อย(M15) ลง + DXY แข็งค่า เอื้อต่อการยิงโซน Sell"
-        setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f}", 'SL': f"${ema_val + (2*atr_val):.2f} (เด็ดขาด)", 'TP': f"${ema_val - (2*atr_val):.2f} ถึง ${ema_val - (4*atr_val):.2f}"}
+        signal = "SHORT (SMC + 5 Pillars Aligned)"
+        reason = "โครงสร้าง 5 Pillars สนับสนุนขาลง (DXY แข็งค่า) ผสานระบบดักซุ่มยิงด้วย SMC"
+        if smc_found:
+            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
+        else:
+            setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val + (2*atr_val):.2f} (เด็ดขาด)", 'TP': f"${ema_val - (2*atr_val):.2f} ถึง ${ema_val - (4*atr_val):.2f}"}
         
     return signal, reason, setup, trend_h4, is_flash_crash
 
@@ -246,10 +296,14 @@ with st.sidebar:
     st.subheader("✍️ Override ข่าวเศรษฐกิจ")
     has_pending = False
     
-    # 🌟 [BUG FIXED] สุ่ม ID ป้องกัน StreamlitDuplicateElementId 🌟
+    # 🌟 [UPDATE] เปลี่ยนลอจิกให้ค้างกล่องไว้ 2 ชั่วโมงหลังข่าวออก ป้องกันกล่องหาย 🌟
     for i, ev in enumerate(ff_events):
-        if ev['impact'] in ['High', 'Medium'] and "Pending" in ev['actual']:
+        time_diff_hours = (ev['dt'] - now_thai).total_seconds() / 3600
+        
+        # เงื่อนไข: โชว์กล่องเมื่อเป็นข่าวสำคัญ และอยู่ในช่วง "ล่วงหน้า 24 ชม." ถึง "ผ่านไปแล้ว 2 ชม. (-2.0)"
+        if ev['impact'] in ['High', 'Medium'] and -2.0 <= time_diff_hours <= 24.0:
             has_pending = True
+            
             new_val = st.text_input(
                 f"[{ev['time']}] {ev['title']}", 
                 value=st.session_state.manual_overrides.get(ev['title'], ""),
@@ -264,7 +318,7 @@ with st.sidebar:
         st.session_state.manual_overrides = {}
         st.rerun()
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Edition")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Edition v8.1")
 
 # 🌟 ปรับ Layout เป็น 5 กล่อง นำ GC=F มาวางเทียบ XAUUSD 🌟
 if metrics and 'GOLD' in metrics:
@@ -327,11 +381,11 @@ with col_ea:
     elif max_ff_smis >= 8.5 or next_red_news:
         st.markdown(f"""<div class="ea-red"><div style="font-size: 18px; font-weight: bold;">🛑 พิจารณาปิด Auto Trading (Force Pause EA)</div><div style="font-size: 14px; margin-top:5px;">ความผันผวนจากข่าวสูง/ใกล้เวลาข่าวออก เสี่ยงเกิด Whipsaw กวาด Grid</div></div>""", unsafe_allow_html=True)
     elif "WAIT" in signal:
-        st.markdown(f"""<div class="ea-warning"><div style="font-size: 18px; font-weight: bold;">⚠️ ระวังการกาง Grid / เตรียมแทรกแซง</div><div style="font-size: 14px; margin-top:5px;">เทรนด์ใหญ่และย่อยขัดแย้งกัน หาก EA ฝืนกาง Grid ให้เฝ้าระวังพอร์ตโดนลาก</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="ea-warning"><div style="font-size: 18px; font-weight: bold;">⚠️ ระวังการกาง Grid / เตรียมแทรกแซง</div><div style="font-size: 14px; margin-top:5px;">เทรนด์ใหญ่และย่อยขัดแย้งกัน หรือ 5 Pillars ขัดแย้งกับทิศทาง หาก EA ฝืนกาง Grid ให้เฝ้าระวังพอร์ตโดนลาก</div></div>""", unsafe_allow_html=True)
     elif "LONG" in signal:
-        st.markdown(f"""<div class="ea-green"><div style="font-size: 18px; font-weight: bold;">▶️ รัน EA (Buy Limit Mode) ได้เต็มสูบ</div><div style="font-size: 14px; margin-top:5px;">โครงสร้าง H4 และ M15 สนับสนุนขาขึ้น DXY อ่อนค่า ปล่อยให้ EA กาง Buy Grid เก็บ Cash Flow ได้อย่างปลอดภัย</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="ea-green"><div style="font-size: 18px; font-weight: bold;">▶️ รัน EA (Buy Limit Mode) ได้เต็มสูบ</div><div style="font-size: 14px; margin-top:5px;">โครงสร้าง 5 Pillars สนับสนุนขาขึ้น DXY อ่อนค่า ปล่อยให้ EA กาง Buy Grid เก็บ Cash Flow ได้อย่างปลอดภัย</div></div>""", unsafe_allow_html=True)
     elif "SHORT" in signal:
-        st.markdown(f"""<div class="ea-green"><div style="font-size: 18px; font-weight: bold;">▶️ รัน EA (Sell Grid Mode) / ห้ามฝืน Buy Limit</div><div style="font-size: 14px; margin-top:5px;">โครงสร้าง H4 และ M15 สนับสนุนขาลง DXY แข็งค่า หาก EA พยายามกาง Buy ให้แทรกแซงปิดมือทันที</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="ea-green"><div style="font-size: 18px; font-weight: bold;">▶️ รัน EA (Sell Grid Mode) / ห้ามฝืน Buy Limit</div><div style="font-size: 14px; margin-top:5px;">โครงสร้าง 5 Pillars สนับสนุนขาลง DXY แข็งค่า หาก EA พยายามกาง Buy ให้แทรกแซงปิดมือทันที</div></div>""", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.write("---")
