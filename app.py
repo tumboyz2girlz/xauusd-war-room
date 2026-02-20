@@ -46,7 +46,8 @@ st.markdown("""
 # --- 2. DATA ENGINE (Full MT5 Extraction) ---
 @st.cache_data(ttl=30)
 def get_market_data():
-    metrics = {'GOLD': (0.0, 0.0), 'DXY': (0.0, 0.0), 'US10Y': (0.0, 0.0)}
+    # เพิ่ม GC_F เข้ามาใน Metric
+    metrics = {'GOLD': (0.0, 0.0), 'GC_F': (0.0, 0.0), 'DXY': (0.0, 0.0), 'US10Y': (0.0, 0.0)}
     df_m15, df_h4 = None, None
     data_source = "Yahoo Finance (Fallback Mode)"
     
@@ -93,6 +94,13 @@ def get_market_data():
             h_dxy = yf.Ticker("DX-Y.NYB").history(period="5d", interval="15m")
             if not h_dxy.empty and len(h_dxy) >= 2: metrics['DXY'] = (h_dxy['Close'].iloc[-1], ((h_dxy['Close'].iloc[-1]-h_dxy['Close'].iloc[-2])/h_dxy['Close'].iloc[-2])*100)
         except: pass
+
+    # 🌟 ดึงข้อมูล Gold Futures (GC=F) 🌟
+    try:
+        h_gcf = yf.Ticker("GC=F").history(period="5d", interval="15m")
+        if not h_gcf.empty and len(h_gcf) >= 2: 
+            metrics['GC_F'] = (h_gcf['Close'].iloc[-1], ((h_gcf['Close'].iloc[-1]-h_gcf['Close'].iloc[-2])/h_gcf['Close'].iloc[-2])*100)
+    except: pass
 
     try:
         h_tnx = yf.Ticker("^TNX").history(period="5d", interval="15m")
@@ -190,13 +198,9 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change):
     current_price = float(m15_current['close']) 
     current_low = float(m15_current['low'])
 
-    # 1. วัดขนาดเนื้อเทียนสีแดง (ต้องลงมาลึกเกิน 15 เหรียญ)
     red_body_size = current_open - current_price
-    
-    # 2. เช็คว่าเป็น "แดงเต็มแท่ง" ไหม? (ราคาปัจจุบันต้องอยู่ใกล้ Low ห่างกันไม่เกิน 3 เหรียญ)
     is_full_body = (current_price - current_low) <= 3.0
 
-    # ทริกเกอร์จะทำงานเมื่อ: ร่วงเกิน 15 เหรียญ + ไม่มีไส้ล่างยาวๆ ดึงกลับ
     is_flash_crash = True if (red_body_size >= 15.0) and is_full_body else False
 
     signal, reason, setup = "WAIT (Fold)", f"H1/H4 Trend ({trend_h4}) ไม่ตรงกับ M15 ({trend_m15}) หรือ DXY ขัดแย้ง", {}
@@ -256,12 +260,14 @@ with st.sidebar:
 
 st.title("🦅 XAUUSD WAR ROOM: Institutional Edition")
 
+# 🌟 ปรับ Layout เป็น 5 กล่อง นำ GC=F มาวางเทียบ XAUUSD 🌟
 if metrics and 'GOLD' in metrics:
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: st.metric("GOLD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
-    with c2: st.metric("DXY", f"{metrics['DXY'][0]:,.2f}", f"{metrics['DXY'][1]:.2f}%", delta_color="inverse")
-    with c3: st.metric("US10Y Yield", f"{metrics['US10Y'][0]:,.2f}%", f"{metrics['US10Y'][1]:.2f}%", delta_color="inverse")
-    with c4: st.metric("SPDR Flow", get_spdr_flow())
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: st.metric("XAUUSD (Spot)", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
+    with c2: st.metric("GC=F (Futures)", f"${metrics['GC_F'][0]:,.2f}", f"{metrics['GC_F'][1]:.2f}%")
+    with c3: st.metric("DXY", f"{metrics['DXY'][0]:,.2f}", f"{metrics['DXY'][1]:.2f}%", delta_color="inverse")
+    with c4: st.metric("US10Y Yield", f"{metrics['US10Y'][0]:,.2f}%", f"{metrics['US10Y'][1]:.2f}%", delta_color="inverse")
+    with c5: st.metric("SPDR Flow", get_spdr_flow())
 
 session_name, session_desc, session_color = get_trading_session()
 st.markdown(f"<div class='session-badge' style='background-color:{session_color}; color:white;'>🗼 {session_name} : {session_desc}</div>", unsafe_allow_html=True)
