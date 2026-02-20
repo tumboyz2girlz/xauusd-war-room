@@ -17,7 +17,6 @@ st.set_page_config(page_title="Kwaktong War Room", page_icon="🦅", layout="wid
 if 'manual_overrides' not in st.session_state:
     st.session_state.manual_overrides = {}
 
-# 🔴 ลิงก์เชื่อม Database ของพี่ตั้ม
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 
 st.markdown("""
@@ -39,19 +38,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. DATA ENGINE (The Firebase Receiver) ---
+# --- 2. DATA ENGINE (Full MT5 Extraction) ---
 @st.cache_data(ttl=30)
 def get_market_data():
     metrics = {'GOLD': (0.0, 0.0), 'DXY': (0.0, 0.0), 'US10Y': (0.0, 0.0)}
     df_m15, df_h4 = None, None
     data_source = "Yahoo Finance (Fallback Mode)"
     
-    # 🌟 1. พยายามดูดจาก MT5 ผ่าน Firebase 🌟
     try:
         res = requests.get(FIREBASE_URL, timeout=5)
         if res.status_code == 200 and res.json() is not None:
             data = res.json()
             
+            # ดึง M15
             if 'XAUUSD' in data:
                 df_xau = pd.DataFrame(data['XAUUSD'])
                 df_xau.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
@@ -59,15 +58,20 @@ def get_market_data():
                 metrics['GOLD'] = (curr_gold, ((curr_gold - prev_gold) / prev_gold) * 100)
                 df_m15 = df_xau
                 data_source = "MT5 Direct Connection ⚡"
-                
+            
+            # ดึง H1 (อัปเกรดใหม่)
+            if 'XAUUSD_H1' in data:
+                df_h1 = pd.DataFrame(data['XAUUSD_H1'])
+                df_h1.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
+                df_h4 = df_h1
+
             if 'DXY' in data:
                 df_dxy = pd.DataFrame(data['DXY'])
                 curr_dxy, prev_dxy = float(df_dxy['c'].iloc[-1]), float(df_dxy['c'].iloc[-2])
                 metrics['DXY'] = (curr_dxy, ((curr_dxy - prev_dxy) / prev_dxy) * 100)
-    except Exception as e: 
-        print(f"Firebase Error: {e}")
+    except Exception as e: pass
 
-    # 🌟 2. ถ้าระบบ MT5 ขัดข้อง ให้ใช้ Yahoo เป็นยางอะไหล่ 🌟
+    # ถ้าพลาดให้กลับไปพึ่ง Yahoo
     if df_m15 is None:
         try:
             h_m15 = yf.Ticker("XAUUSD=X").history(period="5d", interval="15m")
@@ -77,11 +81,11 @@ def get_market_data():
                 df_m15 = h_m15.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'})
         except: pass
 
-    # ดึง H1 (กรองเทรนด์ยาว) 
-    try:
-        h_h1 = yf.Ticker("XAUUSD=X").history(period="1mo", interval="1h")
-        if not h_h1.empty: df_h4 = h_h1.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'})
-    except: pass
+    if df_h4 is None:
+        try:
+            h_h1 = yf.Ticker("XAUUSD=X").history(period="1mo", interval="1h")
+            if not h_h1.empty: df_h4 = h_h1.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'})
+        except: pass
     
     if metrics['DXY'][0] == 0.0:
         try:
