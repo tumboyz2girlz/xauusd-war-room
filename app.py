@@ -333,4 +333,99 @@ st.markdown("""
     <p style="margin-bottom:5px; color:#ddd;"><b>1. ดูสมองกลหลัก (MT5):</b> ดูกล่อง <i>Institutional Manual Trade</i> ด้านบนเป็นหลัก ถ้าระบบขึ้น <b>LONG</b> หรือ <b>SHORT</b> พร้อมให้โซนราคามา แปลว่าโครงสร้างกราฟและ DXY เป็นใจแล้ว</p>
     <p style="margin-bottom:5px; color:#ddd;"><b>2. ใช้หน้าปัดเป็น "น้ำหนักความมั่นใจ":</b></p>
     <ul style="margin-top:0; color:#ddd;">
-        <li>🟢 <b>ทิศทางสอดคล้องกัน (เช่น สมองกลบอก LONG + หน้าปัดชี้ Strong Buy):</b> <i>เหยียบคันเร่ง!</i> ออกหลอดตามปกติ หรือปล่อย EA รันเต็มสูบได้เ
+        <li>🟢 <b>ทิศทางสอดคล้องกัน (เช่น สมองกลบอก LONG + หน้าปัดชี้ Strong Buy):</b> <i>เหยียบคันเร่ง!</i> ออกหลอดตามปกติ หรือปล่อย EA รันเต็มสูบได้เลย</li>
+        <li>🟡 <b>ทิศทางขัดแย้งกัน (เช่น สมองกลบอก LONG + แต่หน้าปัดชี้ Sell / Neutral):</b> <i>ชะลอความเร็ว!</i> เข้าไม้เบาลง (ลด Lot) หรือแคบระยะ TP ให้สั้นลง เพราะโมเมนตัมจาก 26 อินดิเคเตอร์เริ่มหมดแรงแล้ว</li>
+    </ul>
+</div>
+""", unsafe_allow_html=True)
+
+c_gauge1, c_gauge2 = st.columns(2)
+with c_gauge1:
+    st.components.v1.html("""
+    <div class="tradingview-widget-container">
+      <div class="tradingview-widget-container__widget"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js" async>
+      {
+      "interval": "15m",
+      "width": "100%",
+      "isTransparent": true,
+      "height": "400",
+      "symbol": "OANDA:XAUUSD",
+      "showIntervalTabs": true,
+      "displayMode": "single",
+      "locale": "th",
+      "colorTheme": "dark"
+      }
+      </script>
+    </div>
+    """, height=400)
+with c_gauge2:
+    st.components.v1.html("""
+    <div class="tradingview-widget-container">
+      <div class="tradingview-widget-container__widget"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js" async>
+      {
+      "interval": "1h",
+      "width": "100%",
+      "isTransparent": true,
+      "height": "400",
+      "symbol": "OANDA:XAUUSD",
+      "showIntervalTabs": true,
+      "displayMode": "single",
+      "locale": "th",
+      "colorTheme": "dark"
+      }
+      </script>
+    </div>
+    """, height=400)
+
+st.write("---")
+
+tv_gold = f"""<div class="tradingview-widget-container"><div id="tv_gold"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});</script></div>"""
+tv_dxy = f"""<div class="tradingview-widget-container"><div id="tv_dxy"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "CAPITALCOM:DXY", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_dxy"}});</script></div>"""
+
+def display_intelligence():
+    st.subheader("📰 Global Intelligence Hub")
+    tab_eco, tab_pol, tab_war = st.tabs(["📅 ข่าวเศรษฐกิจ", "🏛️ การเมือง & Fed", "⚔️ สงคราม"])
+    
+    with tab_eco:
+        if ff_events:
+            for ev in ff_events:
+                border_color = "#ff3333" if ev['impact'] == 'High' else "#ff9933"
+                st.markdown(f"<div class='ff-card' style='border-left-color: {border_color};'>⚡ [{ev['time']}] <b>{ev['title']}</b><br><span style='color:#aaa; font-size:13px;'>Forecast: {ev['forecast']} | <span style='color:#ffcc00;'>Actual: {ev['actual']}</span></span><br>🔥 SMIS: {ev['smis']}/10</div>", unsafe_allow_html=True)
+        else: st.write("ไม่มีข่าวเศรษฐกิจสำคัญในช่วงนี้")
+            
+    with tab_pol:
+        if pol_news:
+            for news in pol_news:
+                score_class = "score-high" if news['score'] >= 8 else "score-med" if news['score'] >= 5 else "score-low"
+                st.markdown(f"<div class='news-card'><div style='font-size:15px; font-weight:bold;'><a href='{news['link']}' target='_blank' style='color:#ffffff; text-decoration:none;'>🇺🇸 {news['title_th']}</a></div><div style='font-size:12px; color:#aaa; font-style:italic;'>{news['title_en']}</div><div style='margin-top:5px; font-size:11px; color:#00ccff;'>🕒 {news['time']} | 🔥 SMIS Impact: <span class='{score_class}'>{news['score']:.1f}/10</span></div></div>", unsafe_allow_html=True)
+        else: st.write("กำลังรวบรวมข่าวการเมือง...")
+            
+    with tab_war:
+        if war_news:
+            for news in war_news:
+                score_class = "score-high" if news['score'] >= 8 else "score-med" if news['score'] >= 5 else "score-low"
+                st.markdown(f"<div class='news-card' style='border-left-color: #ff3333;'><div style='font-size:15px; font-weight:bold;'><a href='{news['link']}' target='_blank' style='color:#ffffff; text-decoration:none;'>⚠️ {news['title_th']}</a></div><div style='font-size:12px; color:#aaa; font-style:italic;'>{news['title_en']}</div><div style='margin-top:5px; font-size:11px; color:#00ccff;'>🕒 {news['time']} | 🔥 SMIS Impact: <span class='{score_class}'>{news['score']:.1f}/10</span></div></div>", unsafe_allow_html=True)
+        else: st.write("กำลังรวบรวมข่าวภูมิรัฐศาสตร์...")
+
+if layout_mode == "🖥️ Desktop":
+    col1, col2 = st.columns([1.8, 1])
+    with col1:
+        tab_chart_gold, tab_chart_dxy = st.tabs(["🥇 XAUUSD", "💵 DXY"])
+        with tab_chart_gold: st.components.v1.html(tv_gold, height=600)
+        with tab_chart_dxy: st.components.v1.html(tv_dxy, height=600)
+    with col2: display_intelligence()
+else:
+    tab_chart_gold, tab_chart_dxy = st.tabs(["🥇 XAUUSD", "💵 DXY"])
+    with tab_chart_gold: st.components.v1.html(tv_gold, height=400)
+    with tab_chart_dxy: st.components.v1.html(tv_dxy, height=400)
+    display_intelligence()
+
+st.write("---")
+st.markdown("""
+<div style='text-align: center; padding: 20px; color: #888; font-size: 13px;'>
+    ⚙️ <b>Institutional Master Node:</b> Powered by MT5 Firebase Bridge (Live Sync)<br>
+    👨‍💻 Developed with 🔥 by <b>tumboyz2girlz</b> & <b>กวักทอง (Quant CTO)</b>
+</div>
+""", unsafe_allow_html=True)
