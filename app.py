@@ -15,12 +15,13 @@ from streamlit_autorefresh import st_autorefresh
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Kwaktong War Room", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 
-# 🌟 สั่งให้หน้าเว็บกระพริบอัปเดตตัวเองอัตโนมัติ ทุกๆ 60 วินาที (60,000 ms) 🌟
+# 🌟 สั่งให้หน้าเว็บกระพริบอัปเดตตัวเองอัตโนมัติ ทุกๆ 60 วินาที 🌟
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state:
     st.session_state.manual_overrides = {}
 
+# 🔴 ลิงก์ Firebase ของพี่ตั้ม
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 
 st.markdown("""
@@ -202,7 +203,7 @@ ff_events, max_ff_smis, next_red_news = get_forexfactory_usd(st.session_state.ma
 pol_news, war_news = get_categorized_news()
 dxy_change = metrics['DXY'][1] if metrics else 0
 
-# 🌟 สร้างตัวแปรบอกเวลา (Timestamp) ของไทย ณ วินาทีที่สมองกลประมวลผล 🌟
+# 🌟 สร้างตัวแปรบอกเวลา (Timestamp) 🌟
 now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
 timestamp_str = now_thai.strftime("%d %b %Y | %H:%M:%S น.")
 
@@ -291,7 +292,51 @@ with col_ea:
         st.markdown(f"""<div class="ea-green"><div style="font-size: 18px; font-weight: bold;">▶️ รัน EA (Sell Grid Mode) / ห้ามฝืน Buy Limit</div><div style="font-size: 14px; margin-top:5px;">โครงสร้าง H4 และ M15 สนับสนุนขาลง DXY แข็งค่า หาก EA พยายามกาง Buy ให้แทรกแซงปิดมือทันที</div></div>""", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-st.write("")
+st.write("---")
+
+# 🌟 อาวุธใหม่: Market Sentiment Gauge (มาตรวัดอารมณ์ตลาด) 🌟
+st.markdown("### 🧭 Market Sentiment (มาตรวัดอารมณ์ตลาดรวม)")
+c_gauge1, c_gauge2 = st.columns(2)
+with c_gauge1:
+    st.components.v1.html("""
+    <div class="tradingview-widget-container">
+      <div class="tradingview-widget-container__widget"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js" async>
+      {
+      "interval": "15m",
+      "width": "100%",
+      "isTransparent": true,
+      "height": "400",
+      "symbol": "OANDA:XAUUSD",
+      "showIntervalTabs": true,
+      "displayMode": "single",
+      "locale": "th",
+      "colorTheme": "dark"
+      }
+      </script>
+    </div>
+    """, height=400)
+with c_gauge2:
+    st.components.v1.html("""
+    <div class="tradingview-widget-container">
+      <div class="tradingview-widget-container__widget"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js" async>
+      {
+      "interval": "1h",
+      "width": "100%",
+      "isTransparent": true,
+      "height": "400",
+      "symbol": "OANDA:XAUUSD",
+      "showIntervalTabs": true,
+      "displayMode": "single",
+      "locale": "th",
+      "colorTheme": "dark"
+      }
+      </script>
+    </div>
+    """, height=400)
+
+st.write("---")
 
 tv_gold = f"""<div class="tradingview-widget-container"><div id="tv_gold"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});</script></div>"""
 tv_dxy = f"""<div class="tradingview-widget-container"><div id="tv_dxy"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "CAPITALCOM:DXY", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_dxy"}});</script></div>"""
