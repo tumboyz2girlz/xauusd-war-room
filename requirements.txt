@@ -6,3 +6,4 @@ feedparser
 requests
 textblob
 deep-translator
+streamlit-autorefresh
