@@ -46,7 +46,6 @@ st.markdown("""
 # --- 2. DATA ENGINE (Full MT5 Extraction) ---
 @st.cache_data(ttl=30)
 def get_market_data():
-    # เพิ่ม GC_F เข้ามาใน Metric
     metrics = {'GOLD': (0.0, 0.0), 'GC_F': (0.0, 0.0), 'DXY': (0.0, 0.0), 'US10Y': (0.0, 0.0)}
     df_m15, df_h4 = None, None
     data_source = "Yahoo Finance (Fallback Mode)"
@@ -246,13 +245,20 @@ with st.sidebar:
 
     st.subheader("✍️ Override ข่าวเศรษฐกิจ")
     has_pending = False
-    for ev in ff_events:
+    
+    # 🌟 [BUG FIXED] สุ่ม ID ป้องกัน StreamlitDuplicateElementId 🌟
+    for i, ev in enumerate(ff_events):
         if ev['impact'] in ['High', 'Medium'] and "Pending" in ev['actual']:
             has_pending = True
-            new_val = st.text_input(f"[{ev['time']}] {ev['title']}", value=st.session_state.manual_overrides.get(ev['title'], ""))
+            new_val = st.text_input(
+                f"[{ev['time']}] {ev['title']}", 
+                value=st.session_state.manual_overrides.get(ev['title'], ""),
+                key=f"override_news_{i}"
+            )
             if new_val != st.session_state.manual_overrides.get(ev['title'], ""):
                 st.session_state.manual_overrides[ev['title']] = new_val
                 st.rerun()
+                
     if not has_pending: st.write("✅ ไม่มีข่าวรอตัวเลข")
     if st.button("🗑️ ล้างค่าคีย์เอง"):
         st.session_state.manual_overrides = {}
