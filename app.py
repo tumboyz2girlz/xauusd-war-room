@@ -10,9 +10,13 @@ import xml.etree.ElementTree as ET
 import datetime
 import time
 from time import mktime
+from streamlit_autorefresh import st_autorefresh
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Kwaktong War Room", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+
+# 🌟 สั่งให้หน้าเว็บกระพริบอัปเดตตัวเองอัตโนมัติ ทุกๆ 60 วินาที (60,000 ms) 🌟
+st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state:
     st.session_state.manual_overrides = {}
@@ -49,8 +53,6 @@ def get_market_data():
         res = requests.get(FIREBASE_URL, timeout=5)
         if res.status_code == 200 and res.json() is not None:
             data = res.json()
-            
-            # ดึง M15
             if 'XAUUSD' in data:
                 df_xau = pd.DataFrame(data['XAUUSD'])
                 df_xau.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
@@ -59,7 +61,6 @@ def get_market_data():
                 df_m15 = df_xau
                 data_source = "MT5 Direct Connection ⚡"
             
-            # ดึง H1 (อัปเกรดใหม่)
             if 'XAUUSD_H1' in data:
                 df_h1 = pd.DataFrame(data['XAUUSD_H1'])
                 df_h1.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
@@ -69,9 +70,8 @@ def get_market_data():
                 df_dxy = pd.DataFrame(data['DXY'])
                 curr_dxy, prev_dxy = float(df_dxy['c'].iloc[-1]), float(df_dxy['c'].iloc[-2])
                 metrics['DXY'] = (curr_dxy, ((curr_dxy - prev_dxy) / prev_dxy) * 100)
-    except Exception as e: pass
+    except: pass
 
-    # ถ้าพลาดให้กลับไปพึ่ง Yahoo
     if df_m15 is None:
         try:
             h_m15 = yf.Ticker("XAUUSD=X").history(period="5d", interval="15m")
@@ -103,7 +103,6 @@ def get_market_data():
 @st.cache_data(ttl=3600)
 def get_spdr_flow(): return "Neutral (รอดูท่าที)"
 
-# --- 3. NEWS & TIME ENGINE ---
 def get_trading_session():
     now_utc = datetime.datetime.utcnow()
     hour_utc = now_utc.hour
@@ -168,7 +167,6 @@ def get_categorized_news():
     war_news = fetch_rss("(War OR Missile OR Strike OR Iran OR Israel OR Russia OR Ukraine OR Geopolitics)")
     return pol_news, war_news
 
-# --- 4. DUAL-TIMEFRAME STRATEGY ---
 def calculate_institutional_setup(df_m15, df_h4, dxy_change):
     if df_m15 is None or df_h4 is None or len(df_m15) < 55 or len(df_h4) < 55: 
         return "WAIT", "รอข้อมูลราคาทองคำจากเซิร์ฟเวอร์ (กำลังซิงค์...)", {}, "UNKNOWN"
@@ -203,6 +201,10 @@ metrics, df_m15, df_h4, data_source = get_market_data()
 ff_events, max_ff_smis, next_red_news = get_forexfactory_usd(st.session_state.manual_overrides)
 pol_news, war_news = get_categorized_news()
 dxy_change = metrics['DXY'][1] if metrics else 0
+
+# 🌟 สร้างตัวแปรบอกเวลา (Timestamp) ของไทย ณ วินาทีที่สมองกลประมวลผล 🌟
+now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+timestamp_str = now_thai.strftime("%d %b %Y | %H:%M:%S น.")
 
 with st.sidebar:
     st.header("💻 War Room Terminal")
@@ -260,6 +262,7 @@ with col_plan:
     st.markdown(f"""
     <div class="plan-card">
         <h3 style="margin:0; color:#00ccff;">🃏 Institutional Manual Trade</h3>
+        <div style="font-size:12px; color:#aaa; margin-top:5px;">🕒 ประมวลผลล่าสุด: {timestamp_str}</div>
         <div style="color:{sig_color}; font-size:24px; font-weight:bold; margin-top:10px;">{signal}</div>
         <p><b>Logic:</b> {reason}</p>
     """, unsafe_allow_html=True)
@@ -331,4 +334,4 @@ else:
     with tab_chart_dxy: st.components.v1.html(tv_dxy, height=400)
     display_intelligence()
 
-st.markdown("<div class='footer-credits'>⚙️ <b>Institutional Master Node:</b> Powered by MT5 Firebase Bridge</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer-credits'>⚙️ <b>Institutional Master Node:</b> Powered by MT5 Firebase Bridge (Live Sync)</div>", unsafe_allow_html=True)
