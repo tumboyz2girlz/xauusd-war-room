@@ -13,7 +13,7 @@ from time import mktime
 from streamlit_autorefresh import st_autorefresh
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v8.1", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v8.3", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 
 # 🌟 สั่งให้หน้าเว็บกระพริบอัปเดตตัวเองอัตโนมัติ ทุกๆ 60 วินาที 🌟
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
@@ -43,7 +43,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. DATA ENGINE (Full MT5 Extraction) ---
+# --- 2. DATA ENGINE ---
 @st.cache_data(ttl=30)
 def get_market_data():
     metrics = {'GOLD': (0.0, 0.0), 'GC_F': (0.0, 0.0), 'DXY': (0.0, 0.0), 'US10Y': (0.0, 0.0)}
@@ -94,7 +94,6 @@ def get_market_data():
             if not h_dxy.empty and len(h_dxy) >= 2: metrics['DXY'] = (h_dxy['Close'].iloc[-1], ((h_dxy['Close'].iloc[-1]-h_dxy['Close'].iloc[-2])/h_dxy['Close'].iloc[-2])*100)
         except: pass
 
-    # 🌟 ดึงข้อมูล Gold Futures (GC=F) 🌟
     try:
         h_gcf = yf.Ticker("GC=F").history(period="5d", interval="15m")
         if not h_gcf.empty and len(h_gcf) >= 2: 
@@ -118,14 +117,23 @@ def get_trading_session():
     elif 7 <= hour_utc < 13: return "🇬🇧 London Session", "สภาพคล่องปานกลางถึงสูง - กราฟเริ่มเลือกทาง", "#554433"
     else: return "🇺🇸 New York Session", "สภาพคล่องสูงสุด (High Volatility) - ระวังสวิงแรง / รันเทรนด์ได้", "#224422"
 
-@st.cache_data(ttl=900) # ปรับเป็น 15 นาทีลดการโดนบล็อก IP
-def get_forexfactory_usd(manual_overrides):
+@st.cache_data(ttl=900)
+def fetch_ff_xml():
     url = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
     headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        return requests.get(url, headers=headers, timeout=10).content
+    except:
+        return None
+
+def get_forexfactory_usd(manual_overrides):
+    xml_content = fetch_ff_xml()
+    if not xml_content: return [], 0, None
+    
     events, max_smis, next_red_news = [], 0, None
     now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     try:
-        root = ET.fromstring(requests.get(url, headers=headers, timeout=10).content)
+        root = ET.fromstring(xml_content)
         for event in root.findall('event'):
             if event.find('country').text == 'USD' and event.find('impact').text in ['High', 'Medium']:
                 date_str, raw_time = event.find('date').text, event.find('time').text
@@ -135,15 +143,17 @@ def get_forexfactory_usd(manual_overrides):
                 except: continue
                 thai_dt = gmt_dt + datetime.timedelta(hours=7)
                 time_diff_hours = (thai_dt - now_thai).total_seconds() / 3600
-                if time_diff_hours < -12 or (impact == 'High' and time_diff_hours > 24) or (impact == 'Medium' and time_diff_hours > 4): continue
+                
+                if time_diff_hours < -2.0 or (impact == 'High' and time_diff_hours > 24) or (impact == 'Medium' and time_diff_hours > 4): continue
                 if impact == 'High' and 0 < time_diff_hours <= 3:
                     if next_red_news is None or time_diff_hours < next_red_news['hours']:
                         next_red_news = {'title': title, 'hours': time_diff_hours, 'time': thai_dt.strftime("%H:%M น.")}
+                
                 actual = manual_overrides.get(title, event.find('actual').text if event.find('actual') is not None else "Pending")
                 forecast = event.find('forecast').text if event.find('forecast') is not None else ""
                 smis = 8.0 if impact == 'High' else 5.0
                 if max_smis < smis: max_smis = smis
-                events.append({'title': title, 'time': thai_dt.strftime("%d %b - %H:%M น."), 'impact': impact, 'actual': actual, 'forecast': forecast, 'smis': smis, 'dt': thai_dt})
+                events.append({'title': title, 'time': thai_dt.strftime("%d %b - %H:%M น."), 'impact': impact, 'actual': actual, 'forecast': forecast, 'smis': smis, 'dt': thai_dt, 'time_diff_hours': time_diff_hours})
         events.sort(key=lambda x: x['dt'])
         return events, max_smis, next_red_news
     except: return [], 0, None
@@ -175,7 +185,8 @@ def get_categorized_news():
     war_news = fetch_rss("(War OR Missile OR Strike OR Iran OR Israel OR Russia OR Ukraine OR Geopolitics)")
     return pol_news, war_news
 
-def calculate_institutional_setup(df_m15, df_h4, dxy_change):
+# 🌟 ฟังก์ชันหลัก: คำนวณสัญญาณ ผสาน Macro + SMC + ข่าวสาร 🌟
+def calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_war_score):
     if df_m15 is None or df_h4 is None or len(df_m15) < 55 or len(df_h4) < 55: 
         return "WAIT", "รอข้อมูลราคาทองคำจากเซิร์ฟเวอร์ (กำลังซิงค์...)", {}, "UNKNOWN", False
     
@@ -201,20 +212,21 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change):
     is_full_body = (current_price - current_low) <= 3.0
     is_flash_crash = True if (red_body_size >= 15.0) and is_full_body else False
 
-    # 🧲 SMC ENGINE (Smart Money Concepts: FVG & Liquidity) 🧲
+    # ⚠️ WAR PANIC SENSOR ⚠️
+    is_war_panic = True if max_war_score >= 8.0 else False
+
+    # 🧲 SMC ENGINE (FVG & Liquidity) 🧲
     def get_smc_setup(df, trend_dir):
         df_recent = df.tail(40).reset_index(drop=True)
         atr_smc = df_recent['atr'].iloc[-1]
-        
         found = False
         e_msg, s_msg, t_msg = "", "", ""
         
         if trend_dir == "UP":
-            # หา Bullish FVG: Low ของแท่งปัจจุบัน > High ของ 2 แท่งที่แล้ว
             for i in range(len(df_recent)-1, 1, -1):
                 low_3 = float(df_recent['low'].iloc[i])
                 high_1 = float(df_recent['high'].iloc[i-2])
-                if low_3 > high_1: # เจอ FVG ขาขึ้น
+                if low_3 > high_1: # Bullish FVG
                     fvg_bot = high_1
                     fvg_top = low_3
                     sl_price = float(df_recent['low'].iloc[i-2]) - (atr_smc * 0.5)
@@ -226,11 +238,10 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change):
                     found = True
                     break
         elif trend_dir == "DOWN":
-            # หา Bearish FVG: High ของแท่งปัจจุบัน < Low ของ 2 แท่งที่แล้ว
             for i in range(len(df_recent)-1, 1, -1):
                 high_3 = float(df_recent['high'].iloc[i])
                 low_1 = float(df_recent['low'].iloc[i-2])
-                if high_3 < low_1: # เจอ FVG ขาลง
+                if high_3 < low_1: # Bearish FVG
                     fvg_top = low_1
                     fvg_bot = high_3
                     sl_price = float(df_recent['high'].iloc[i-2]) + (atr_smc * 0.5)
@@ -245,41 +256,64 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change):
 
     smc_found, smc_entry, smc_sl, smc_tp = get_smc_setup(df_m15, trend_m15)
 
-    # 🌐 ประมวลผลขั้นสุดท้าย (5 Pillars Macro + SMC) 🌐
+    # 🛑 สร้างข้อความเตือนภัยข่าว (Human-in-the-Loop Override)
+    news_warning_msg = ""
+    if next_red_news and next_red_news['hours'] <= 2.0:
+        news_warning_msg = f"""
+        <div style='background-color:#332200; padding:10px; border-left: 4px solid #ffcc00; border-radius:4px; margin-top:10px;'>
+            <span style='color:#ffcc00; font-size:13px;'>
+                ⚠️ <b>NEWS ALERT:</b> อีก <b>{next_red_news['hours']:.1f} ชม.</b> ข่าวกล่องแดง <b>{next_red_news['title']}</b> จะออก<br>
+                <i>*คำแนะนำ: โปรดบริหารความเสี่ยง (ลด Lot Size) หรือพิจารณาพักเทรดชั่วคราว ให้ขึ้นอยู่กับการพิจารณาหน้างานของท่าน</i>
+            </span>
+        </div>"""
+
+    # 🌐 ประมวลผลขั้นสุดท้าย 🌐
     signal, reason, setup = "WAIT (Fold)", f"H1/H4 Trend ({trend_h4}) ไม่ตรงกับ M15 ({trend_m15}) หรือ DXY ขัดแย้ง", {}
 
     if is_flash_crash:
         signal = "🚨 FLASH CRASH (SELL NOW!)"
-        reason = f"เซ็นเซอร์จับวาฬทำงาน! พบการเทขายแดงเต็มแท่ง (Solid Bearish) ดิ่งลงมาแล้ว ${red_body_size:.2f} สั่งระงับ EA Buy ทันที! และพิจารณาเข้าแทง SELL ตามน้ำเพื่อขี่คลื่นวาฬ!"
-        setup = {
-            'Entry': f"กด Sell (Market) ทันที หรือรอเด้งโซน ${current_price + (0.5*atr_val):.2f}",
-            'SL': f"${current_open + (0.5*atr_val):.2f} (เหนือโซนที่วาฬเริ่มทุบ)",
-            'TP': f"${current_price - (3*atr_val):.2f} ถึง ${current_price - (6*atr_val):.2f} (รันเทรนด์ลง)"
-        }
+        reason = f"เซ็นเซอร์จับวาฬทำงาน! พบการเทขายแดงเต็มแท่งดิ่งลงมา ${red_body_size:.2f} สั่งระงับ EA Buy ทันที! และพิจารณาแทง SELL ตามน้ำ!"
+        setup = {'Entry': f"กด Sell (Market) ทันที หรือรอเด้งโซน ${current_price + (0.5*atr_val):.2f}", 'SL': f"${current_open + (0.5*atr_val):.2f} (เหนือจุดเริ่มต้นทุบ)", 'TP': f"${current_price - (3*atr_val):.2f} (รันเทรนด์ลง)"}
+    
     elif trend_h4 == "UP" and trend_m15 == "UP" and dxy_change <= 0:
-        signal = "LONG (SMC + 5 Pillars Aligned)"
-        reason = "โครงสร้าง 5 Pillars สนับสนุนขาขึ้น (DXY อ่อนค่า) ผสานระบบดักซุ่มยิงด้วย SMC"
-        if smc_found:
-            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
+        if is_war_panic:
+            signal = "STRONG LONG (War + Macro + SMC 🚀)"
+            reason = "โครงสร้างมหภาคเป็นใจ + ความตึงเครียดสงครามพุ่งสูง (Safe Haven Flow) + SMC ดักซุ่มยิง! แนะนำให้รันเทรนด์แบบเต็มสูบ"
         else:
-            setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val - (2*atr_val):.2f} (เด็ดขาด)", 'TP': f"${ema_val + (2*atr_val):.2f} ถึง ${ema_val + (4*atr_val):.2f}"}
+            signal = "LONG (SMC + 5 Pillars Aligned)"
+            reason = "โครงสร้าง 5 Pillars สนับสนุนขาขึ้น (DXY อ่อนค่า) ผสานระบบดักซุ่มยิงจุดเข้าด้วย SMC"
+        
+        reason += news_warning_msg # แนบคำเตือนต่อท้ายเหตุผล
+        if smc_found: setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
+        else: setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val - (2*atr_val):.2f}", 'TP': f"${ema_val + (2*atr_val):.2f}"}
+    
     elif trend_h4 == "DOWN" and trend_m15 == "DOWN" and dxy_change >= 0:
-        signal = "SHORT (SMC + 5 Pillars Aligned)"
-        reason = "โครงสร้าง 5 Pillars สนับสนุนขาลง (DXY แข็งค่า) ผสานระบบดักซุ่มยิงด้วย SMC"
-        if smc_found:
-            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
+        if is_war_panic:
+            signal = "WAIT (War Override ⚠️)"
+            reason = "โครงสร้าง Technical สั่ง SHORT แต่ความตึงเครียดสงครามพุ่งสูงปรี๊ด! ระบบสั่งระงับการแทงลง (ห้าม Short ทองคำสวนทางสงครามเด็ดขาด!)"
+            setup = {}
+            reason += news_warning_msg # แนบคำเตือนต่อท้ายเหตุผล
         else:
-            setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val + (2*atr_val):.2f} (เด็ดขาด)", 'TP': f"${ema_val - (2*atr_val):.2f} ถึง ${ema_val - (4*atr_val):.2f}"}
+            signal = "SHORT (SMC + 5 Pillars Aligned)"
+            reason = "โครงสร้าง 5 Pillars สนับสนุนขาลง (DXY แข็งค่า) ผสานระบบดักซุ่มยิงจุดเข้าด้วย SMC"
+            reason += news_warning_msg # แนบคำเตือนต่อท้ายเหตุผล
+            if smc_found: setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
+            else: setup = {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val + (2*atr_val):.2f}", 'TP': f"${ema_val - (2*atr_val):.2f}"}
+    else:
+        reason += news_warning_msg # แนบคำเตือนต่อท้ายให้โหมด WAIT ธรรมดาด้วย
         
     return signal, reason, setup, trend_h4, is_flash_crash
 
-# --- 5. UI DASHBOARD ---
+# --- UI DASHBOARD ---
 metrics, df_m15, df_h4, data_source = get_market_data()
 ff_events, max_ff_smis, next_red_news = get_forexfactory_usd(st.session_state.manual_overrides)
 pol_news, war_news = get_categorized_news()
 dxy_change = metrics['DXY'][1] if metrics else 0
 
-# 🌟 สร้างตัวแปรบอกเวลา (Timestamp) 🌟
+# คำนวณคะแนนสงครามสูงสุดเพื่อส่งให้สมองกล
+max_war_score = max([news['score'] for news in war_news]) if war_news else 0.0
+
+# 🌟 สร้างตัวแปรบอกเวลา 🌟
 now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
 timestamp_str = now_thai.strftime("%d %b %Y | %H:%M:%S น.")
 
@@ -296,31 +330,21 @@ with st.sidebar:
     st.subheader("✍️ Override ข่าวเศรษฐกิจ")
     has_pending = False
     
-    # 🌟 [UPDATE] เปลี่ยนลอจิกให้ค้างกล่องไว้ 2 ชั่วโมงหลังข่าวออก ป้องกันกล่องหาย 🌟
     for i, ev in enumerate(ff_events):
-        time_diff_hours = (ev['dt'] - now_thai).total_seconds() / 3600
-        
-        # เงื่อนไข: โชว์กล่องเมื่อเป็นข่าวสำคัญ และอยู่ในช่วง "ล่วงหน้า 24 ชม." ถึง "ผ่านไปแล้ว 2 ชม. (-2.0)"
-        if ev['impact'] in ['High', 'Medium'] and -2.0 <= time_diff_hours <= 24.0:
-            has_pending = True
-            
-            new_val = st.text_input(
-                f"[{ev['time']}] {ev['title']}", 
-                value=st.session_state.manual_overrides.get(ev['title'], ""),
-                key=f"override_news_{i}"
-            )
+        if ev['impact'] in ['High', 'Medium'] and -2.0 <= ev.get('time_diff_hours', 0) <= 24.0:
+            if "Pending" in ev['actual']: has_pending = True
+            new_val = st.text_input(f"[{ev['time']}] {ev['title']}", value=st.session_state.manual_overrides.get(ev['title'], ""), key=f"override_news_{i}")
             if new_val != st.session_state.manual_overrides.get(ev['title'], ""):
                 st.session_state.manual_overrides[ev['title']] = new_val
                 st.rerun()
                 
-    if not has_pending: st.write("✅ ไม่มีข่าวรอตัวเลข")
+    if not has_pending: st.write("✅ ไม่มีข่าวรอตัวเลขในช่วงนี้")
     if st.button("🗑️ ล้างค่าคีย์เอง"):
         st.session_state.manual_overrides = {}
         st.rerun()
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Edition v8.1")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Edition v8.3")
 
-# 🌟 ปรับ Layout เป็น 5 กล่อง นำ GC=F มาวางเทียบ XAUUSD 🌟
 if metrics and 'GOLD' in metrics:
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1: st.metric("XAUUSD (Spot)", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
@@ -336,38 +360,38 @@ if next_red_news:
     st.markdown(f"""
     <div class="alert-card">
         <h4 style="margin:0; color:#ff3333;">⚠️ QUANT ALERT: ระวังพายุข่าวมหภาค!</h4>
-        <p style="margin:5px 0 0 0; color:#fff;">อีกประมาณ <b>{next_red_news['hours']:.1f} ชั่วโมง</b> ({next_red_news['time']}) จะมีข่าวกล่องแดง <b>{next_red_news['title']}</b><br>
-        <i>คำแนะนำ: หากเข้าเทรดตอนนี้ ควรพิจารณาลดระยะ TP สั้นลง หรือเคลียร์พอร์ต/ลดหลอดก่อนข่าวออก เพื่อป้องกันการสะบัดตัวรุนแรง (Whipsaw)</i></p>
+        <p style="margin:5px 0 0 0; color:#fff;">อีกประมาณ <b>{next_red_news['hours']:.1f} ชั่วโมง</b> ({next_red_news['time']}) จะมีข่าวกล่องแดง <b>{next_red_news['title']}</b></p>
     </div>
     """, unsafe_allow_html=True)
 
 st.markdown("---")
 
-signal, reason, setup, trend_h4, is_flash_crash = calculate_institutional_setup(df_m15, df_h4, dxy_change)
+# โยนข้อมูลข่าวและสงครามเข้าไปประมวลผลร่วมกับ SMC และ Technical
+signal, reason, setup, trend_h4, is_flash_crash = calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_war_score)
 
 col_plan, col_ea = st.columns([1, 1])
 
 with col_plan:
-    sig_color = "#ff00ff" if is_flash_crash else ("#00ff00" if "LONG" in signal else "#ff3333" if "SHORT" in signal else "#ffcc00")
+    # กำหนดสีให้สวยงามตามสถานะที่ฉลาดขึ้น
+    sig_color = "#ff00ff" if is_flash_crash else ("#ffcc00" if "WAIT" in signal else ("#00ff00" if "LONG" in signal else "#ff3333"))
     
     st.markdown(f"""
     <div class="plan-card" style="{ 'border-color: #ff00ff;' if is_flash_crash else '' }">
         <h3 style="margin:0; color:{'#ff00ff' if is_flash_crash else '#00ccff'};">🃏 Institutional Manual Trade</h3>
         <div style="font-size:12px; color:#aaa; margin-top:5px;">🕒 ประมวลผลล่าสุด: {timestamp_str}</div>
         <div style="color:{sig_color}; font-size:24px; font-weight:bold; margin-top:10px;">{signal}</div>
-        <p><b>Logic:</b> {reason}</p>
+        <div style="font-size:14px; margin-top:10px;"><b>Logic:</b> {reason}</div>
     """, unsafe_allow_html=True)
     
     if setup:
         box_border = "#ff00ff" if is_flash_crash else "#444"
         title_color = "#ff00ff" if is_flash_crash else "#00ccff"
         st.markdown(f"""
-        <div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid {box_border};">
+        <div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid {box_border}; margin-top: 15px;">
             <div style="color:{title_color}; font-weight:bold; margin-bottom:5px;">🎯 Dynamic Zones {'(REVENGE SHORT 🦈)' if is_flash_crash else ''}:</div>
             <div style="margin-bottom:5px;">📍 <b>Entry Zone:</b> {setup['Entry']}</div>
-            <div style="margin-bottom:5px; color:#ff4444;">🛑 <b>Stoploss:</b> ยอมแพ้เด็ดขาดที่ {setup['SL']}</div>
+            <div style="margin-bottom:5px; color:#ff4444;">🛑 <b>Stoploss:</b> {setup['SL']}</div>
             <div style="color:#00ff00;">💰 <b>TP Zone:</b> {setup['TP']}</div>
-            <div style="margin-top:10px; font-size:12px; color:#aaa;">*ขนาด Lot ให้อ้างอิงตามระยะ SL และความเสี่ยงที่รับได้ของพอร์ตตัวเอง</div>
         </div>
         """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
@@ -378,72 +402,36 @@ with col_ea:
     
     if is_flash_crash:
         st.markdown(f"""<div class="ea-red"><div style="font-size: 18px; font-weight: bold; color: #ff3333;">🚨 EMERGENCY: ปิด AUTO TRADING ทันที!</div><div style="font-size: 14px; margin-top:5px;">เซ็นเซอร์ Anti-Dump ทำงาน! วาฬกำลังทุบตลาด ห้าม EA กาง Buy Grid สวนเด็ดขาด ให้พิจารณากดมือเข้าไม้ SELL ตามกรอบด้านซ้ายมือแทน!</div></div>""", unsafe_allow_html=True)
-    elif max_ff_smis >= 8.5 or next_red_news:
-        st.markdown(f"""<div class="ea-red"><div style="font-size: 18px; font-weight: bold;">🛑 พิจารณาปิด Auto Trading (Force Pause EA)</div><div style="font-size: 14px; margin-top:5px;">ความผันผวนจากข่าวสูง/ใกล้เวลาข่าวออก เสี่ยงเกิด Whipsaw กวาด Grid</div></div>""", unsafe_allow_html=True)
+    elif max_ff_smis >= 8.5 or (next_red_news and next_red_news['hours'] <= 2.0):
+        st.markdown(f"""<div class="ea-warning"><div style="font-size: 18px; font-weight: bold;">🛑 แจ้งเตือน EA: ใกล้เวลาข่าวออก</div><div style="font-size: 14px; margin-top:5px;">แนะนำให้ตรวจสอบสถานะ EA พิจารณาลดระยะ TP หรือ Pause ชั่วคราวเพื่อป้องกัน Whipsaw</div></div>""", unsafe_allow_html=True)
     elif "WAIT" in signal:
-        st.markdown(f"""<div class="ea-warning"><div style="font-size: 18px; font-weight: bold;">⚠️ ระวังการกาง Grid / เตรียมแทรกแซง</div><div style="font-size: 14px; margin-top:5px;">เทรนด์ใหญ่และย่อยขัดแย้งกัน หรือ 5 Pillars ขัดแย้งกับทิศทาง หาก EA ฝืนกาง Grid ให้เฝ้าระวังพอร์ตโดนลาก</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="ea-warning"><div style="font-size: 18px; font-weight: bold;">⚠️ EA STANDBY (Pause Mode)</div><div style="font-size: 14px; margin-top:5px;">ระบบคัดกรองพบความเสี่ยงสูง ให้พักการเปิดออเดอร์ใหม่เพื่อความปลอดภัยของพอร์ต</div></div>""", unsafe_allow_html=True)
     elif "LONG" in signal:
-        st.markdown(f"""<div class="ea-green"><div style="font-size: 18px; font-weight: bold;">▶️ รัน EA (Buy Limit Mode) ได้เต็มสูบ</div><div style="font-size: 14px; margin-top:5px;">โครงสร้าง 5 Pillars สนับสนุนขาขึ้น DXY อ่อนค่า ปล่อยให้ EA กาง Buy Grid เก็บ Cash Flow ได้อย่างปลอดภัย</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="ea-green"><div style="font-size: 18px; font-weight: bold;">▶️ รัน EA (Buy Limit Mode) ได้เต็มสูบ</div><div style="font-size: 14px; margin-top:5px;">Macro และ Technical ปลอดภัย ปล่อยให้ EA กาง Buy Grid เก็บ Cash Flow ได้อย่างมั่นใจ</div></div>""", unsafe_allow_html=True)
     elif "SHORT" in signal:
-        st.markdown(f"""<div class="ea-green"><div style="font-size: 18px; font-weight: bold;">▶️ รัน EA (Sell Grid Mode) / ห้ามฝืน Buy Limit</div><div style="font-size: 14px; margin-top:5px;">โครงสร้าง 5 Pillars สนับสนุนขาลง DXY แข็งค่า หาก EA พยายามกาง Buy ให้แทรกแซงปิดมือทันที</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="ea-green"><div style="font-size: 18px; font-weight: bold;">▶️ รัน EA (Sell Grid Mode) / ห้ามฝืน Buy Limit</div><div style="font-size: 14px; margin-top:5px;">กระแสเงินไหลออกดอลลาร์แข็ง หาก EA พยายามกาง Buy ให้แทรกแซงปิดมือทันที</div></div>""", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.write("---")
 
-# 🌟 อาวุธใหม่: Market Sentiment Gauge พร้อมคู่มือการอ่านค่า 🌟
 st.markdown("### 🧭 Market Sentiment (มาตรวัดอารมณ์ตลาดรวม)")
-
 st.markdown("""
 <div style="background-color:#1a1a2e; padding:15px; border-radius:8px; border-left: 5px solid #00ccff; margin-bottom: 20px;">
     <h4 style="margin-top:0; color:#00ccff;">💡 คู่มือการอ่านหน้าปัด (Trading Playbook)</h4>
-    <p style="margin-bottom:5px; color:#ddd;"><b>1. ดูสมองกลหลัก (MT5):</b> ดูกล่อง <i>Institutional Manual Trade</i> ด้านบนเป็นหลัก ถ้าระบบขึ้น <b>LONG</b> หรือ <b>SHORT</b> พร้อมให้โซนราคามา แปลว่าโครงสร้างกราฟและ DXY เป็นใจแล้ว</p>
+    <p style="margin-bottom:5px; color:#ddd;"><b>1. ดูสมองกลหลัก (MT5):</b> ดูกล่อง <i>Institutional Manual Trade</i> ด้านบนเป็นหลัก เพราะประมวลผลควบรวมทั้ง SMC, ข่าวเศรษฐกิจ และสงครามไว้ให้แล้ว</p>
     <p style="margin-bottom:5px; color:#ddd;"><b>2. ใช้หน้าปัดเป็น "น้ำหนักความมั่นใจ":</b></p>
     <ul style="margin-top:0; color:#ddd;">
-        <li>🟢 <b>ทิศทางสอดคล้องกัน (เช่น สมองกลบอก LONG + หน้าปัดชี้ Strong Buy):</b> <i>เหยียบคันเร่ง!</i> ออกหลอดตามปกติ หรือปล่อย EA รันเต็มสูบได้เลย</li>
-        <li>🟡 <b>ทิศทางขัดแย้งกัน (เช่น สมองกลบอก LONG + แต่หน้าปัดชี้ Sell / Neutral):</b> <i>ชะลอความเร็ว!</i> เข้าไม้เบาลง (ลด Lot) หรือแคบระยะ TP ให้สั้นลง เพราะโมเมนตัมจาก 26 อินดิเคเตอร์เริ่มหมดแรงแล้ว</li>
+        <li>🟢 <b>ทิศทางสอดคล้องกัน (เช่น สมองกลบอก LONG + หน้าปัดชี้ Strong Buy):</b> <i>เหยียบคันเร่ง!</i> ปล่อย EA รันเต็มสูบได้เลย</li>
+        <li>🟡 <b>ทิศทางขัดแย้งกัน (เช่น สมองกลบอก LONG + แต่หน้าปัดชี้ Sell / Neutral):</b> <i>ชะลอความเร็ว!</i> เข้าไม้เบาลง (ลด Lot) หรือแคบระยะ TP ให้สั้นลง</li>
     </ul>
 </div>
 """, unsafe_allow_html=True)
 
 c_gauge1, c_gauge2 = st.columns(2)
 with c_gauge1:
-    st.components.v1.html("""
-    <div class="tradingview-widget-container">
-      <div class="tradingview-widget-container__widget"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js" async>
-      {
-      "interval": "15m",
-      "width": "100%",
-      "isTransparent": true,
-      "height": "400",
-      "symbol": "OANDA:XAUUSD",
-      "showIntervalTabs": true,
-      "displayMode": "single",
-      "locale": "th",
-      "colorTheme": "dark"
-      }
-      </script>
-    </div>
-    """, height=400)
+    st.components.v1.html("""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js" async>{"interval": "15m","width": "100%","isTransparent": true,"height": "400","symbol": "OANDA:XAUUSD","showIntervalTabs": true,"displayMode": "single","locale": "th","colorTheme": "dark"}</script></div>""", height=400)
 with c_gauge2:
-    st.components.v1.html("""
-    <div class="tradingview-widget-container">
-      <div class="tradingview-widget-container__widget"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js" async>
-      {
-      "interval": "1h",
-      "width": "100%",
-      "isTransparent": true,
-      "height": "400",
-      "symbol": "OANDA:XAUUSD",
-      "showIntervalTabs": true,
-      "displayMode": "single",
-      "locale": "th",
-      "colorTheme": "dark"
-      }
-      </script>
-    </div>
-    """, height=400)
+    st.components.v1.html("""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js" async>{"interval": "1h","width": "100%","isTransparent": true,"height": "400","symbol": "OANDA:XAUUSD","showIntervalTabs": true,"displayMode": "single","locale": "th","colorTheme": "dark"}</script></div>""", height=400)
 
 st.write("---")
 
