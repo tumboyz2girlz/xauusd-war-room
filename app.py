@@ -12,9 +12,10 @@ import time
 from time import mktime
 from streamlit_autorefresh import st_autorefresh
 import re
+import plotly.graph_objects as go
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v10.4", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v10.5", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state:
@@ -251,8 +252,6 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_
 
     df_m15['ema50'] = ta.ema(df_m15['close'], length=50)
     df_m15['atr'] = ta.atr(df_m15['high'], df_m15['low'], df_m15['close'], length=14)
-    
-    # 🌟 เครื่องยนต์คำนวณ Momentum (RSI & MACD) 🌟
     df_m15['rsi'] = ta.rsi(df_m15['close'], length=14)
     macd = ta.macd(df_m15['close'], fast=12, slow=26, signal=9)
     df_m15 = pd.concat([df_m15, macd], axis=1)
@@ -266,7 +265,6 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_
     current_rsi = float(m15_current['rsi']) if not pd.isna(m15_current['rsi']) else 50.0
     current_macd_hist = float(m15_current['MACDh_12_26_9']) if 'MACDh_12_26_9' in m15_current and not pd.isna(m15_current['MACDh_12_26_9']) else 0.0
 
-    # 🚨 Anti-Dump Sensor 🚨
     red_body_size = m15_current['open'] - m15_current['close']
     is_flash_crash = True if (red_body_size >= 15.0) and ((m15_current['close'] - m15_current['low']) <= 3.0) else False
     is_war_panic = True if max_war_score >= 8.0 else False
@@ -303,22 +301,20 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_
         signal = "🚨 FLASH CRASH (SELL NOW!)"
         reason = f"เซ็นเซอร์พบการเทขายแดงเต็มแท่งดิ่งลงมา ${red_body_size:.2f} สั่งแทง SELL ตามน้ำ!"
         setup = {'Entry': f"กด Sell ทันที หรือรอเด้งโซน ${m15_current['close'] + (0.5*atr_val):.2f}", 'SL': f"${m15_current['open'] + (0.5*atr_val):.2f}", 'TP': f"${m15_current['close'] - (3*atr_val):.2f}"}
-    
     elif trend_h4 == "UP" and trend_m15 == "UP":
         if recent_news_dir == "DOWN":
             signal, reason, setup = "WAIT (News Conflict ⚠️)", "โครงสร้างขาขึ้น แต่ข่าว MT5 ล่าสุดกดดันให้ทองลง (Conflict) ให้รอดูสถานการณ์", {}
         elif current_rsi > 70.0:  
             signal = "PENDING LONG (รอย่อตัว ⚠️)"
             reason = f"เทรนด์ขาขึ้น แต่ RSI ทะลุ {current_rsi:.1f} (Overbought) ห้ามไล่ราคา! ให้ตั้ง Buy Limit ดักรอที่โซน FVG/EMA ด้านล่าง"
-            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val - (2*atr_val):.2f}", 'TP': f"${ema_val + (2*atr_val):.2f}"}
+            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f}", 'SL': f"${ema_val - (2*atr_val):.2f}", 'TP': f"${ema_val + (2*atr_val):.2f}"}
         else:
             signal = "STRONG LONG (War+Macro)" if is_war_panic else "LONG"
             reason = "สงครามหนุน+Macroเป็นใจ" if is_war_panic else "โครงสร้าง 5 Pillars สนับสนุนขาขึ้น"
             if current_macd_hist > 0: reason += " + 🚀 MACD มีแรงส่งขึ้น (Momentum หนุน)"
             else: reason += " + 🐌 แรงส่ง MACD เริ่มอ่อน ระวังการพักตัว"
             if recent_news_dir == "UP": reason += " + ข่าว MT5 หนุนทอง 🟢"
-            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val - (2*atr_val):.2f}", 'TP': f"${ema_val + (2*atr_val):.2f}"}
-    
+            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f}", 'SL': f"${ema_val - (2*atr_val):.2f}", 'TP': f"${ema_val + (2*atr_val):.2f}"}
     elif trend_h4 == "DOWN" and trend_m15 == "DOWN":
         if is_war_panic: 
             signal, reason, setup = "WAIT", "ห้าม Short สวนกระแสสงครามเด็ดขาด!", {}
@@ -327,14 +323,14 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_
         elif current_rsi < 30.0: 
             signal = "PENDING SHORT (รอเด้ง ⚠️)"
             reason = f"เทรนด์ขาลง แต่ RSI ตกไปที่ {current_rsi:.1f} (Oversold) ห้ามกด Sell ก้นเหว! ให้ตั้ง Sell Limit ดักรอที่โซน FVG/EMA ด้านบน"
-            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val + (2*atr_val):.2f}", 'TP': f"${ema_val - (2*atr_val):.2f}"}
+            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f}", 'SL': f"${ema_val + (2*atr_val):.2f}", 'TP': f"${ema_val - (2*atr_val):.2f}"}
         else:
             signal = "SHORT"
             reason = "โครงสร้าง 5 Pillars สนับสนุนขาลง"
             if current_macd_hist < 0: reason += " + 🚀 MACD มีแรงกดลง (Momentum หนุน)"
             else: reason += " + 🐌 แรงส่ง MACD ขาลงเริ่มพับ ระวังการเด้งสู้"
             if recent_news_dir == "DOWN": reason += " + ข่าว MT5 กดดันทอง 🔴"
-            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f} (EMA Base)", 'SL': f"${ema_val + (2*atr_val):.2f}", 'TP': f"${ema_val - (2*atr_val):.2f}"}
+            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f}", 'SL': f"${ema_val + (2*atr_val):.2f}", 'TP': f"${ema_val - (2*atr_val):.2f}"}
     
     reason += news_warning_msg
     return signal, reason, setup, trend_h4, is_flash_crash
@@ -378,6 +374,41 @@ def check_pending_trades(current_high, current_low):
             except: pass
     for t in trades_to_remove: st.session_state.pending_trades.remove(t)
 
+# --- 8. AI VISUALIZER (วาดกราฟและตีเส้น FVG) ---
+def plot_setup_chart(df, setup_dict):
+    if df is None or df.empty or not setup_dict: return None
+    
+    df_plot = df.tail(100).copy()
+    df_plot['datetime'] = pd.to_datetime(df_plot['time'], unit='s')
+    
+    fig = go.Figure(data=[go.Candlestick(
+        x=df_plot['datetime'], open=df_plot['open'], high=df_plot['high'], low=df_plot['low'], close=df_plot['close'],
+        increasing_line_color='#00ff00', decreasing_line_color='#ff3333', name='XAUUSD'
+    )])
+
+    def get_prices(text):
+        return [float(x) for x in re.findall(r'\d+\.\d+', str(text).replace(',', ''))]
+
+    sl_prices = get_prices(setup_dict.get('SL', ''))
+    tp_prices = get_prices(setup_dict.get('TP', ''))
+    entry_prices = get_prices(setup_dict.get('Entry', ''))
+
+    if sl_prices: fig.add_hline(y=sl_prices[0], line_dash="dash", line_color="red", annotation_text="🛑 SL", annotation_position="bottom right")
+    if tp_prices: fig.add_hline(y=tp_prices[0], line_dash="dash", line_color="lime", annotation_text="💰 TP", annotation_position="top right")
+    
+    if entry_prices:
+        if len(entry_prices) >= 2: # วาดกล่อง FVG โซน
+            fig.add_hrect(y0=entry_prices[0], y1=entry_prices[1], fillcolor="rgba(0, 204, 255, 0.2)", line_width=0, annotation_text="📍 Entry FVG Zone", annotation_position="top right")
+        else: # เส้นเดี่ยว
+            fig.add_hline(y=entry_prices[0], line_dash="dash", line_color="cyan", annotation_text="📍 Entry", annotation_position="top right")
+
+    fig.update_layout(
+        template='plotly_dark', margin=dict(l=10, r=10, t=30, b=10), height=400,
+        title="📊 AI Setup Visualization (Live Data)", xaxis_rangeslider_visible=False,
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+    )
+    return fig
+
 # --- UI MAIN ---
 metrics, df_m15, df_h4, mt5_news, data_source = get_market_data()
 ff_raw_news = get_forexfactory_usd(st.session_state.manual_overrides)
@@ -408,7 +439,7 @@ with st.sidebar:
                 
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v10.4")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v10.5")
 
 if metrics and 'GOLD' in metrics:
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -432,7 +463,8 @@ if "WAIT" not in signal and setup:
         log_new_trade(signal, setup, reason)
         st.session_state.last_logged_setup = current_setup_signature
 
-col_plan, col_ea = st.columns([1, 1])
+# 🌟 จัด Layout ใหม่: ฝั่งซ้ายคือคำสั่ง / ฝั่งขวาคือกระดานวาดกราฟ AI 🌟
+col_plan, col_chart = st.columns([1, 1.2])
 
 with col_plan:
     sig_color = "#ff00ff" if is_flash_crash else ("#ffcc00" if "WAIT" in signal or "PENDING" in signal else ("#00ff00" if "LONG" in signal else "#ff3333"))
@@ -454,7 +486,6 @@ with col_plan:
         """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-with col_ea:
     st.markdown('<div class="ea-card">', unsafe_allow_html=True)
     st.markdown('<h3 style="margin:0; color:#d4af37;">🤖 EA Commander</h3>', unsafe_allow_html=True)
     if is_flash_crash:
@@ -464,6 +495,18 @@ with col_ea:
     else:
         st.markdown("<div style='color:#00ff00; font-weight:bold; margin-top:10px;'>▶️ EA RUNNING: กางระบบ Grid ได้ปกติ</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+
+with col_chart:
+    if setup and df_m15 is not None:
+        fig = plot_setup_chart(df_m15, setup)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.markdown("""
+        <div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #555; height: 100%; display: flex; align-items: center; justify-content: center;'>
+            <span style='color:#888; font-size:18px;'>📡 กำลังสแกนหา Setup FVG...<br>กราฟเส้นปะจะแสดงผลอัตโนมัติเมื่อพบจุดเข้า</span>
+        </div>
+        """, unsafe_allow_html=True)
 
 st.write("---")
 
@@ -494,11 +537,9 @@ def display_intelligence():
         for news in war_news: 
             st.markdown(f"<div class='news-card' style='border-color:#ff3333;'><a href='{news['link']}' target='_blank' style='color:#fff;'>⚠️ {news['title_th']}</a><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
 
-# --- สร้าง Widget กราฟ TradingView ---
 tv_gold = f"""<div class="tradingview-widget-container"><div id="tv_gold"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});</script></div>"""
 tv_dxy = f"""<div class="tradingview-widget-container"><div id="tv_dxy"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "CAPITALCOM:DXY", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_dxy"}});</script></div>"""
 
-# --- จัด Layout กราฟ และ ข่าว ---
 if layout_mode == "🖥️ Desktop":
     col1, col2 = st.columns([1.8, 1])
     with col1:
