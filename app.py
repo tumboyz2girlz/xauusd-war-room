@@ -14,7 +14,7 @@ from streamlit_autorefresh import st_autorefresh
 import re
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v10.2", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v10.3", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state:
@@ -187,7 +187,7 @@ def merge_news_sources(mt5_list, ff_list):
                 next_red_news = {'title': ev['title'], 'hours': ev['time_diff_hours'], 'time': ev['dt'].strftime("%H:%M น.")}
     return merged, max_smis, next_red_news
 
-# --- 5. 🤖 AI HEADLINE ANALYZER (News & War) ---
+# --- 5. 🤖 AI HEADLINE ANALYZER ---
 @st.cache_data(ttl=900) 
 def get_categorized_news():
     translator = GoogleTranslator(source='en', target='th')
@@ -204,14 +204,12 @@ def get_categorized_news():
                 title_en = entry.title
                 title_lower = title_en.lower()
                 
-                # Sentiment Score
                 polarity = TextBlob(title_en).sentiment.polarity
                 base_score = abs(polarity) * 5
                 if any(kw in title_lower for kw in ['war', 'missile', 'strike', 'emergency', 'attack']): base_score += 4.0
                 elif any(kw in title_lower for kw in ['fed', 'inflation', 'rate']): base_score += 2.0
                 final_score = min(10.0, max(1.0, base_score))
 
-                # 🌟 สแกนหาทิศทางทองคำจากหัวข้อข่าว (NLP Keyword Scanner) 🌟
                 direction = "⚪ NEUTRAL"
                 if any(w in title_lower for w in ['war', 'missile', 'strike', 'attack', 'escalat', 'tension', 'emergency', 'crisis', 'terror', 'bomb']):
                     direction = "🟢 GOLD UP (Safe Haven / Risk-Off)"
@@ -226,12 +224,8 @@ def get_categorized_news():
                     elif polarity >= 0.2: direction = "🔴 GOLD DOWN (Positive News/Calm)"
 
                 news_list.append({
-                    'title_en': title_en, 
-                    'title_th': translator.translate(title_en), 
-                    'link': entry.link, 
-                    'time': date_str, 
-                    'score': final_score,
-                    'direction': direction
+                    'title_en': title_en, 'title_th': translator.translate(title_en), 
+                    'link': entry.link, 'time': date_str, 'score': final_score, 'direction': direction
                 })
         except: pass
         return news_list
@@ -247,7 +241,7 @@ def get_trading_session():
 @st.cache_data(ttl=3600)
 def get_spdr_flow(): return "Neutral (รอดูท่าที)"
 
-# --- 6. CORE AI ENGINE (SMC + Macro + News) ---
+# --- 6. CORE AI ENGINE (SMC + Macro + Momentum Physics 🚀) ---
 def calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_war_score, final_news_list):
     if df_m15 is None or df_h4 is None or len(df_m15) < 55 or len(df_h4) < 55: 
         return "WAIT", "รอข้อมูลราคาทองคำจากเซิร์ฟเวอร์", {}, "UNKNOWN", False
@@ -257,11 +251,20 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_
 
     df_m15['ema50'] = ta.ema(df_m15['close'], length=50)
     df_m15['atr'] = ta.atr(df_m15['high'], df_m15['low'], df_m15['close'], length=14)
+    
+    # 🌟 เครื่องยนต์คำนวณ Momentum (RSI & MACD) 🌟
+    df_m15['rsi'] = ta.rsi(df_m15['close'], length=14)
+    macd = ta.macd(df_m15['close'], fast=12, slow=26, signal=9)
+    df_m15 = pd.concat([df_m15, macd], axis=1)
+
     m15_current = df_m15.iloc[-1]
     trend_m15 = "UP" if df_m15.iloc[-2]['close'] > df_m15.iloc[-2]['ema50'] else "DOWN"
     
     atr_val = float(df_m15.iloc[-2]['atr'])
     ema_val = float(df_m15.iloc[-2]['ema50'])
+    
+    current_rsi = float(m15_current['rsi']) if not pd.isna(m15_current['rsi']) else 50.0
+    current_macd_hist = float(m15_current['MACDh_12_26_9']) if 'MACDh_12_26_9' in m15_current and not pd.isna(m15_current['MACDh_12_26_9']) else 0.0
 
     red_body_size = m15_current['open'] - m15_current['close']
     is_flash_crash = True if (red_body_size >= 15.0) and ((m15_current['close'] - m15_current['low']) <= 3.0) else False
@@ -302,18 +305,35 @@ def calculate_institutional_setup(df_m15, df_h4, dxy_change, next_red_news, max_
     elif trend_h4 == "UP" and trend_m15 == "UP":
         if recent_news_dir == "DOWN":
             signal, reason = "WAIT (News Conflict ⚠️)", "โครงสร้างขาขึ้น แต่ข่าว MT5 ล่าสุดกดดันให้ทองลง (Conflict) ให้รอดูสถานการณ์"
+        elif current_rsi > 70.0:  # 🌟 ฟิลเตอร์ Overbought (เหนื่อยล้า) 🌟
+            signal, reason = "WAIT (Overbought ⚠️)", f"โครงสร้างสั่ง LONG แต่กราฟหมดแรงซื้อ (RSI = {current_rsi:.1f}) เสี่ยงติดดอย! รอย่อเคลียร์แรงขาย"
+            setup = {}
         else:
-            signal, reason = ("STRONG LONG (War+Macro)", "สงครามหนุน+Macroเป็นใจ") if is_war_panic else ("LONG", "โครงสร้าง 5 Pillars สนับสนุนขาขึ้น")
+            signal = "STRONG LONG (War+Macro)" if is_war_panic else "LONG"
+            reason = "สงครามหนุน+Macroเป็นใจ" if is_war_panic else "โครงสร้าง 5 Pillars สนับสนุนขาขึ้น"
+            
+            # 🌟 ประมวลผลร่วมกับ MACD Velocity 🌟
+            if current_macd_hist > 0: reason += " + 🚀 MACD มีแรงส่งขึ้น (Momentum หนุน)"
+            else: reason += " + 🐌 แรงส่ง MACD เริ่มอ่อน ระวังการพักตัว"
+            
             if recent_news_dir == "UP": reason += " + ข่าว MT5 หนุนทอง 🟢"
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f}", 'SL': f"${ema_val - (2*atr_val):.2f}", 'TP': f"${ema_val + (2*atr_val):.2f}"}
     
     elif trend_h4 == "DOWN" and trend_m15 == "DOWN":
-        if is_war_panic: signal, reason, setup = "WAIT", "ห้าม Short สวนกระแสสงครามเด็ดขาด!", {}
+        if is_war_panic: 
+            signal, reason, setup = "WAIT", "ห้าม Short สวนกระแสสงครามเด็ดขาด!", {}
         elif recent_news_dir == "UP":
-            signal, reason = "WAIT (News Conflict ⚠️)", "โครงสร้างขาลง แต่ข่าว MT5 ล่าสุดหนุนให้ทองขึ้น (Conflict) ให้รอดูสถานการณ์"
-            setup = {}
+            signal, reason, setup = "WAIT (News Conflict ⚠️)", "โครงสร้างขาลง แต่ข่าว MT5 ล่าสุดหนุนให้ทองขึ้น (Conflict) ให้รอดูสถานการณ์", {}
+        elif current_rsi < 30.0: # 🌟 ฟิลเตอร์ Oversold (เหนื่อยล้า) 🌟
+            signal, reason, setup = "WAIT (Oversold ⚠️)", f"โครงสร้างสั่ง SHORT แต่กราฟหมดแรงขาย (RSI = {current_rsi:.1f}) เสี่ยงก้นเหว! รอเด้งเคลียร์แรงซื้อ", {}
         else:
-            signal, reason = "SHORT", "โครงสร้าง 5 Pillars สนับสนุนขาลง"
+            signal = "SHORT"
+            reason = "โครงสร้าง 5 Pillars สนับสนุนขาลง"
+            
+            # 🌟 ประมวลผลร่วมกับ MACD Velocity 🌟
+            if current_macd_hist < 0: reason += " + 🚀 MACD มีแรงกดลง (Momentum หนุน)"
+            else: reason += " + 🐌 แรงส่ง MACD ขาลงเริ่มพับ ระวังการเด้งสู้"
+
             if recent_news_dir == "DOWN": reason += " + ข่าว MT5 กดดันทอง 🔴"
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema_val - (0.5*atr_val):.2f} ถึง ${ema_val + (0.5*atr_val):.2f}", 'SL': f"${ema_val + (2*atr_val):.2f}", 'TP': f"${ema_val - (2*atr_val):.2f}"}
     
@@ -389,7 +409,7 @@ with st.sidebar:
                 
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v10.2")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v10.3")
 
 if metrics and 'GOLD' in metrics:
     c1, c2, c3, c4, c5 = st.columns(5)
