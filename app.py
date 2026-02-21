@@ -14,7 +14,7 @@ from streamlit_autorefresh import st_autorefresh
 import re
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v10.1", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v10.2", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state:
@@ -222,7 +222,6 @@ def get_categorized_news():
                 elif any(w in title_lower for w in ['rate cut', 'cut rate', 'dovish', 'recession', 'weak', 'slowdown', 'pause']):
                     direction = "🟢 GOLD UP (Dovish / Weak Econ)"
                 else:
-                    # ถ้าไม่มี Keyword ให้ใช้อารมณ์ (Sentiment) แทน ข่าวลบ=ทองขึ้น / ข่าวดี=ทองลง
                     if polarity <= -0.2: direction = "🟢 GOLD UP (Negative News/Panic)"
                     elif polarity >= 0.2: direction = "🔴 GOLD DOWN (Positive News/Calm)"
 
@@ -232,7 +231,7 @@ def get_categorized_news():
                     'link': entry.link, 
                     'time': date_str, 
                     'score': final_score,
-                    'direction': direction # ส่งทิศทางที่วิเคราะห์ได้กลับไป
+                    'direction': direction
                 })
         except: pass
         return news_list
@@ -390,7 +389,7 @@ with st.sidebar:
                 
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v10.1")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v10.2")
 
 if metrics and 'GOLD' in metrics:
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -476,11 +475,20 @@ def display_intelligence():
         for news in war_news: 
             st.markdown(f"<div class='news-card' style='border-color:#ff3333;'><a href='{news['link']}' target='_blank' style='color:#fff;'>⚠️ {news['title_th']}</a><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
 
+# --- สร้าง Widget กราฟ TradingView ---
+tv_gold = f"""<div class="tradingview-widget-container"><div id="tv_gold"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});</script></div>"""
+tv_dxy = f"""<div class="tradingview-widget-container"><div id="tv_dxy"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "CAPITALCOM:DXY", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_dxy"}});</script></div>"""
+
+# --- จัด Layout กราฟ และ ข่าว ---
 if layout_mode == "🖥️ Desktop":
     col1, col2 = st.columns([1.8, 1])
     with col1:
-        st.components.v1.html(f"""<div class="tradingview-widget-container"><div id="tv_gold"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": 600, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});</script></div>""", height=600)
+        tab_chart_gold, tab_chart_dxy = st.tabs(["🥇 XAUUSD", "💵 DXY"])
+        with tab_chart_gold: st.components.v1.html(tv_gold, height=600)
+        with tab_chart_dxy: st.components.v1.html(tv_dxy, height=600)
     with col2: display_intelligence()
 else:
-    st.components.v1.html(f"""<div class="tradingview-widget-container"><div id="tv_gold"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": 400, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});</script></div>""", height=400)
+    tab_chart_gold, tab_chart_dxy = st.tabs(["🥇 XAUUSD", "💵 DXY"])
+    with tab_chart_gold: st.components.v1.html(tv_gold, height=400)
+    with tab_chart_dxy: st.components.v1.html(tv_dxy, height=400)
     display_intelligence()
