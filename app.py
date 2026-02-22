@@ -16,7 +16,7 @@ import re
 import plotly.graph_objects as go
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v11.7", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v11.8", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -26,7 +26,6 @@ if 'pending_trades' not in st.session_state: st.session_state.pending_trades = [
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
 
-# 🟢 CSS ล็อคความสูงตายตัว 120px 🟢
 st.markdown("""
 <style>
     div[data-testid="stMetric"] {
@@ -221,7 +220,6 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics):
             elif "DOWN" in ev['direction']: recent_news_dir = "DOWN"
             break
 
-    # 🟢 ตัวแปรสำหรับ 5 Pillars (DXY & Sentiment) 🟢
     retail_short = sentiment.get('short', 50)
     retail_long = sentiment.get('long', 50)
     dxy_trend = metrics['DXY'][1]
@@ -233,16 +231,14 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics):
     elif trend_h4 == "UP" and trend_m15 == "UP":
         if recent_news_dir == "DOWN": return "WAIT (News Conflict ⚠️)", "เทรนด์ขาขึ้น แต่ข่าว MT5 ล่าสุดกดดันทองลง", {}, False
         elif rsi > 70: 
-            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema-(0.5*atr):.2f}", 'SL': f"${ema-(2*atr):.2f}", 'TP': f"${ema+(2*atr):.2f}"}
+            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema-(0.5*atr):.2f} (EMA)", 'SL': f"${ema-(2*atr):.2f}", 'TP': f"${ema+(2*atr):.2f}"}
             return "PENDING LONG", f"RSI ทะลุ {rsi:.1f} (Overbought) ห้ามไล่ราคา! ให้ตั้ง Buy Limit รอย่อ", setup, False
         else:
             reason = "เทรนด์หลักขาขึ้น"
             reason += " + 🚀 MACD หนุน" if macd_hist > 0 else " + 🐌 MACD เริ่มอ่อนแรง"
-            # เอา Sentiment เข้ามาช่วยวิเคราะห์ใน Normal Mode
-            if retail_short > 60: reason += " + 🐑 รายย่อยฝืน Sell (Sentiment หนุนทองขึ้น)"
-            elif retail_long > 70: reason += " + ⚠️ ระวังรายย่อยแห่ Buy ตาม (เสี่ยงโดนเจ้ามือทุบ)"
-            # เอา DXY เข้ามาเช็ค
-            if dxy_trend < 0: reason += " + 💵 DXY อ่อนค่า (Macro เป็นใจ)"
+            if retail_short > 60: reason += " + 🐑 รายย่อยฝืน Sell"
+            elif retail_long > 70: reason += " + ⚠️ ระวังรายย่อยแห่ Buy ตาม"
+            if dxy_trend < 0: reason += " + 💵 DXY อ่อนค่า"
             
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema:.2f} (EMA)", 'SL': f"${ema-(2*atr):.2f}", 'TP': f"${ema+(2*atr):.2f}"}
             return "LONG", reason, setup, False
@@ -250,14 +246,14 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics):
     elif trend_h4 == "DOWN" and trend_m15 == "DOWN":
         if recent_news_dir == "UP": return "WAIT (News Conflict ⚠️)", "เทรนด์ขาลง แต่ข่าว MT5 ล่าสุดหนุนทองขึ้น", {}, False
         elif rsi < 30: 
-            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema+(0.5*atr):.2f}", 'SL': f"${ema+(2*atr):.2f}", 'TP': f"${ema-(2*atr):.2f}"}
+            setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema+(0.5*atr):.2f} (EMA)", 'SL': f"${ema+(2*atr):.2f}", 'TP': f"${ema-(2*atr):.2f}"}
             return "PENDING SHORT", f"RSI ตกไปที่ {rsi:.1f} (Oversold) ห้ามกด Sell ก้นเหว! ตั้ง Sell Limit รอเด้ง", setup, False
         else:
             reason = "เทรนด์หลักขาลง"
             reason += " + 🚀 MACD หนุน" if macd_hist < 0 else " + 🐌 MACD เริ่มอ่อนแรง"
-            if retail_long > 60: reason += " + 🐑 รายย่อยฝืน Buy (Sentiment หนุนทองลง)"
-            elif retail_short > 70: reason += " + ⚠️ ระวังรายย่อยแห่ Sell ตาม (เสี่ยงโดนเจ้ามือลากกิน SL)"
-            if dxy_trend > 0: reason += " + 💵 DXY แข็งค่า (Macro เป็นใจ)"
+            if retail_long > 60: reason += " + 🐑 รายย่อยฝืน Buy"
+            elif retail_short > 70: reason += " + ⚠️ ระวังรายย่อยแห่ Sell ตาม"
+            if dxy_trend > 0: reason += " + 💵 DXY แข็งค่า"
             
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema:.2f} (EMA)", 'SL': f"${ema+(2*atr):.2f}", 'TP': f"${ema-(2*atr):.2f}"}
             return "SHORT", reason, setup, False
@@ -297,7 +293,8 @@ def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment):
         if sentiment['short'] < 75.0: return "WAIT", f"รายย่อยยัง Short ไม่พอ ({sentiment['short']}%)", {}, "🟢"
         entry = current_price - 1.0 
         sl = max(sweep_price - 0.5, entry - 3.0) 
-        return "ALL-IN LONG 🚀", f"Confluence 100%! ตั้ง Buy Limit ดักรอย่อ", {'Entry': f"${entry:.2f}", 'SL': f"${sl:.2f}", 'TP': f"${entry + ((entry - sl) * 2):.2f}"}, "🟢"
+        # 🟢 ส่งข้อมูล Sweep Price ออกไปด้วย เพื่อใช้วาดกราฟ 🟢
+        return "ALL-IN LONG 🚀", f"Confluence 100%! ตั้ง Buy Limit ดักรอย่อ", {'Entry': f"${entry:.2f}", 'SL': f"${sl:.2f}", 'TP': f"${entry + ((entry - sl) * 2):.2f}", 'Sweep': f"${sweep_price:.2f}"}, "🟢"
         
     elif direction == "SHORT":
         if dxy_trend < 0: return "WAIT", "DXY ยังอ่อนค่า (ขัดแย้ง)", {}, "🟢"
@@ -305,7 +302,8 @@ def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment):
         if sentiment['long'] < 75.0: return "WAIT", f"รายย่อยยัง Buy ไม่พอ ({sentiment['long']}%)", {}, "🟢"
         entry = current_price + 1.0 
         sl = min(sweep_price + 0.5, entry + 3.0) 
-        return "ALL-IN SHORT 🚀", f"Confluence 100%! ตั้ง Sell Limit ดักรอเด้ง", {'Entry': f"${entry:.2f}", 'SL': f"${sl:.2f}", 'TP': f"${entry - ((sl - entry) * 2):.2f}"}, "🟢"
+        # 🟢 ส่งข้อมูล Sweep Price ออกไปด้วย เพื่อใช้วาดกราฟ 🟢
+        return "ALL-IN SHORT 🚀", f"Confluence 100%! ตั้ง Sell Limit ดักรอเด้ง", {'Entry': f"${entry:.2f}", 'SL': f"${sl:.2f}", 'TP': f"${entry - ((sl - entry) * 2):.2f}", 'Sweep': f"${sweep_price:.2f}"}, "🟢"
 
     return "WAIT", "รอ...", {}, light
 
@@ -347,21 +345,39 @@ def generate_exec_summary(df_h4, metrics, next_red_news, sentiment):
     else: summary += "<br>✅ **News Alert:** ไม่มีข่าวกล่องแดงกวนใจ สามารถรันเทรนด์ Grid ได้ตามปกติ"
     return summary
 
-# --- 8. VISUALIZER ---
+# --- 8. SMART VISUALIZER (วาด SMC Label) 🟢 ---
 def plot_setup_chart(df, setup_dict, mode="Normal"):
     if df is None or df.empty or not setup_dict: return None
     df_plot = df.tail(100).copy()
     df_plot['datetime'] = pd.to_datetime(df_plot['time'], unit='s')
     fig = go.Figure(data=[go.Candlestick(x=df_plot['datetime'], open=df_plot['open'], high=df_plot['high'], low=df_plot['low'], close=df_plot['close'], increasing_line_color='#00ff00', decreasing_line_color='#ff3333')])
+    
     def get_prices(t): return [float(x) for x in re.findall(r'\d+\.\d+', str(t).replace(',', ''))]
-    sl, tp, entry = get_prices(setup_dict.get('SL', '')), get_prices(setup_dict.get('TP', '')), get_prices(setup_dict.get('Entry', ''))
+    
+    sl = get_prices(setup_dict.get('SL', ''))
+    tp = get_prices(setup_dict.get('TP', ''))
+    entry = get_prices(setup_dict.get('Entry', ''))
+    sweep = get_prices(setup_dict.get('Sweep', '')) # ดึงค่า Sweep/CHoCH
+    
+    # 🟢 อ่านเงื่อนไขเพื่อตั้งชื่อป้ายกำกับให้ฉลาดขึ้น 🟢
+    entry_text = str(setup_dict.get('Entry', ''))
+    label_text = "🎯 Entry"
+    if "FVG" in entry_text: label_text = "🎯 FVG Zone"
+    elif "EMA" in entry_text: label_text = "🎯 EMA Base"
     
     line_color = "#ffcc00" if mode == "All-In" else "#00ccff"
+    
     if sl: fig.add_hline(y=sl[0], line_dash="dash", line_color="#ff4444", annotation_text="🛑 SL", annotation_position="bottom right", annotation_font_color="#ff4444")
     if tp: fig.add_hline(y=tp[0], line_dash="dash", line_color="#00ff00", annotation_text="💰 TP", annotation_position="top right", annotation_font_color="#00ff00")
+    
+    # 🟢 วาดเส้นบอก CHoCH / Liquidity Sweep (ถ้ามี) 🟢
+    if sweep: fig.add_hline(y=sweep[0], line_dash="dot", line_color="#ff00ff", annotation_text="⚡ CHoCH / Sweep", annotation_position="left", annotation_font_color="#ff00ff")
+    
+    # 🟢 วาดกล่อง FVG หรือเส้น EMA พร้อมป้ายกำกับที่ฉลาดขึ้น 🟢
     if entry:
-        if len(entry) >= 2: fig.add_hrect(y0=min(entry), y1=max(entry), fillcolor=f"rgba({'255, 204, 0' if mode=='All-In' else '0, 204, 255'}, 0.2)", line_width=1, annotation_text="🎯 Entry", annotation_position="top right")
-        else: fig.add_hline(y=entry[0], line_dash="dash", line_color=line_color, annotation_text="🎯 Entry", annotation_position="top right", annotation_font_color=line_color)
+        if len(entry) >= 2: fig.add_hrect(y0=min(entry), y1=max(entry), fillcolor=f"rgba({'255, 204, 0' if mode=='All-In' else '0, 204, 255'}, 0.2)", line_width=1, annotation_text=label_text, annotation_position="top right")
+        else: fig.add_hline(y=entry[0], line_dash="dash", line_color=line_color, annotation_text=label_text, annotation_position="top right", annotation_font_color=line_color)
+        
     fig.update_layout(template='plotly_dark', margin=dict(l=10, r=50, t=10, b=10), height=350, xaxis_rangeslider_visible=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     return fig
 
@@ -374,7 +390,6 @@ pol_news, war_news = get_categorized_news()
 
 if df_m15 is not None: check_pending_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
-# 🟢 ส่งข้อมูล Sentiment และ Metrics (DXY) เข้าไปวิเคราะห์ใน Normal Mode ด้วย! 🟢
 sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics)
 sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment)
 
@@ -395,7 +410,7 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v11.7")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v11.8")
 
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
