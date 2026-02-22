@@ -16,7 +16,7 @@ import re
 import plotly.graph_objects as go
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.0", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.1", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -43,12 +43,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. DATA ENGINE (Strict MT5 Sync) ---
+# --- 2. DATA ENGINE ---
 @st.cache_data(ttl=30)
 def get_market_data():
     metrics = {'GOLD': (0.0, 0.0), 'GC_F': (0.0, 0.0), 'DXY': (0.0, 0.0), 'US10Y': (0.0, 0.0)}
     df_m15, df_h4, mt5_news = None, None, []
-    market_status = "🔴 ตลาดปิด / ขาดการเชื่อมต่อ MT5" # 🟢 ตัวแปรใหม่ เช็คสถานะตลาด
     
     try:
         res = requests.get(FIREBASE_URL, timeout=5)
@@ -60,7 +59,6 @@ def get_market_data():
                 curr_gold, prev_gold = float(df_xau['close'].iloc[-1]), float(df_xau['close'].iloc[-2])
                 metrics['GOLD'] = (curr_gold, ((curr_gold - prev_gold) / prev_gold) * 100)
                 df_m15 = df_xau
-                market_status = "🟢 เชื่อมต่อ MT5 สำเร็จ (Market Open)" # 🟢 พบข้อมูลจาก MT5 ถือว่าตลาดเปิด
             if 'XAUUSD_H1' in data:
                 df_h1 = pd.DataFrame(data['XAUUSD_H1'])
                 df_h1.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
@@ -77,10 +75,6 @@ def get_market_data():
                     mt5_news.append({'source': 'MT5', 'title': ev['title'], 'time': event_dt.strftime("%H:%M"), 'impact': ev['impact'], 'actual': st.session_state.manual_overrides.get(ev['title'], ev['actual']), 'forecast': ev['forecast'], 'direction': ev.get('direction', ''), 'dt': event_dt, 'time_diff_hours': time_diff_hours})
     except: pass
 
-    # 🟢 ถอดราคาทอง Yahoo Finance ออกเด็ดขาด 🟢
-    # ถ้า df_m15 เป็น None ระบบจะปล่อยให้เป็น None ไปเลย เพื่อเข้าสู่โหมด "ตลาดปิด"
-
-    # แต่ยังคงดึงข้อมูล Macro (GC=F, US10Y) จาก Yahoo อยู่ เพราะ MT5 ไม่มีให้
     try:
         h_gcf = yf.Ticker("GC=F").history(period="5d", interval="15m")
         if not h_gcf.empty and len(h_gcf) >= 2: metrics['GC_F'] = (h_gcf['Close'].iloc[-1], ((h_gcf['Close'].iloc[-1]-h_gcf['Close'].iloc[-2])/h_gcf['Close'].iloc[-2])*100)
@@ -90,7 +84,28 @@ def get_market_data():
         if not h_tnx.empty and len(h_tnx) >= 2: metrics['US10Y'] = (h_tnx['Close'].iloc[-1], ((h_tnx['Close'].iloc[-1]-h_tnx['Close'].iloc[-2])/h_tnx['Close'].iloc[-2])*100)
     except: pass
     
-    return metrics, df_m15, df_h4, mt5_news, market_status
+    return metrics, df_m15, df_h4, mt5_news
+
+# 🟢 2.1 MARKET STATUS SENSOR (จับเวลาและวันหยุด) 🟢
+def check_market_status(df_m15):
+    now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+    weekday = now_thai.weekday()
+    
+    # ถ้าเป็นวันเสาร์ (5) หรือ อาทิตย์ (6) คือตลาดปิดแน่นอน
+    if weekday == 5 or weekday == 6:
+        return True, "🛑 ตลาดปิดทำการ (Weekend)"
+        
+    if df_m15 is None or df_m15.empty:
+        return True, "🛑 ไม่มีข้อมูลการเชื่อมต่อจาก MT5"
+        
+    # เช็คความเก่าของข้อมูล (Staleness)
+    last_candle_time = pd.to_datetime(df_m15['time'].iloc[-1], unit='s') + datetime.timedelta(hours=7)
+    hours_diff = (now_thai - last_candle_time).total_seconds() / 3600
+    
+    if hours_diff > 2.0:
+        return True, f"🛑 ตลาดเปิด แต่ MT5 ขาดการเชื่อมต่อ (ข้อมูลหยุดเดินมา {hours_diff:.1f} ชั่วโมง)"
+        
+    return False, "🟢 เชื่อมต่อ MT5 สำเร็จ (Market Open)"
 
 # --- 3. FOREXFACTORY & SCRAPERS ---
 @st.cache_data(ttl=900)
@@ -153,7 +168,6 @@ def get_categorized_news():
                 if any(kw in title_lower for kw in ['war', 'missile', 'strike', 'emergency', 'attack']): base_score += 4.0
                 elif any(kw in title_lower for kw in ['fed', 'inflation', 'rate']): base_score += 2.0
                 final_score = min(10.0, max(1.0, base_score))
-
                 direction = "⚪ NEUTRAL"
                 if any(w in title_lower for w in ['war', 'missile', 'strike', 'attack', 'escalat']): direction = "🟢 GOLD UP (Safe Haven)"
                 elif any(w in title_lower for w in ['ceasefire', 'peace']): direction = "🔴 GOLD DOWN (Risk-On)"
@@ -162,18 +176,17 @@ def get_categorized_news():
                 else:
                     if polarity <= -0.2: direction = "🟢 GOLD UP (Negative/Panic)"
                     elif polarity >= 0.2: direction = "🔴 GOLD DOWN (Positive/Calm)"
-
                 news_list.append({'title_en': entry.title, 'title_th': translator.translate(entry.title), 'link': entry.link, 'time': date_str, 'score': final_score, 'direction': direction})
         except: pass
         return news_list
     return fetch_rss("(Fed OR Powell OR Treasury)"), fetch_rss("(War OR Missile OR Israel OR Russia)")
 
 # --- 4. CORE AI ---
-def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics):
-    # 🟢 ถ้าตลาดปิด (ไม่มี df_m15) ให้รีเทิร์นสถานะตลาดปิดทันที 🟢
-    if df_m15 is None or df_h4 is None: 
-        return "MARKET CLOSED 🛑", "ไม่มีข้อมูลการเทรดสดจาก MT5 (ตลาดปิด หรือ เซิร์ฟเวอร์ออฟไลน์)", {}, False
-    
+def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed):
+    # 🟢 ถ้าตลาดปิด ตัดจบ ไม่ต้องคำนวณ 🟢
+    if is_market_closed: 
+        return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด หรือขาดข้อมูลล่าสุดจาก MT5", {}, False
+        
     df_h4['ema50'] = ta.ema(df_h4['close'], length=50)
     df_m15['ema50'] = ta.ema(df_m15['close'], length=50)
     df_m15['atr'] = ta.atr(df_m15['high'], df_m15['low'], df_m15['close'], length=14)
@@ -262,8 +275,10 @@ def detect_choch_and_sweep(df):
     if recent['high'].iloc[-5:-1].max() > highest_high and current_close < recent['low'].iloc[-5:-1].min(): return True, "SHORT", recent['high'].iloc[-5:-1].max(), current_close
     return False, "", 0, 0
 
-def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment):
-    if df_m15 is None: return "MARKET CLOSED 🛑", "ไม่มีข้อมูลการเทรดสดจาก MT5", {}, "🔴"
+def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed):
+    # 🟢 ถ้าตลาดปิด ตัดจบ ไม่ต้องคำนวณ 🟢
+    if is_market_closed: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, "🔴"
+    
     light = "🔴"
     if next_red_news:
         hrs = next_red_news['hours']
@@ -377,7 +392,7 @@ def check_pending_trades(current_high, current_low):
 
 # --- 7. EXECUTIVE SUMMARY ---
 def generate_exec_summary(df_h4, metrics, next_red_news, sentiment):
-    if df_h4 is None: return "กำลังรวบรวมข้อมูล..."
+    if df_h4 is None: return "ข้อมูล Market ปิดทำการ ไม่สามารถประมวลผลเทรนด์ได้ในขณะนี้"
     trend = "ขาขึ้น 🟢" if df_h4.iloc[-2]['close'] > ta.ema(df_h4['close'], length=50).iloc[-2] else "ขาลง 🔴"
     dxy_status = "อ่อนค่า (หนุนทอง)" if metrics['DXY'][1] < 0 else "แข็งค่า (กดดันทอง)"
     summary = f"**📊 Overall Market Bias:** ขณะนี้ทองคำอยู่ในโครงสร้างเทรนด์ **{trend}** (H4) "
@@ -415,29 +430,26 @@ def plot_setup_chart(df, setup_dict, mode="Normal"):
     return fig
 
 # --- UI MAIN ---
-metrics, df_m15, df_h4, mt5_news, market_status = get_market_data() # 🟢 รับค่า Market Status มาแสดงผล
+metrics, df_m15, df_h4, mt5_news = get_market_data()
+is_market_closed, status_msg = check_market_status(df_m15) # 🟢 ตัวแปรเช็คตลาดปิด
+
 ff_raw_news = get_forexfactory_usd()
 final_news_list, next_red_news = merge_news_sources(mt5_news, ff_raw_news)
 sentiment = get_retail_sentiment()
 pol_news, war_news = get_categorized_news() 
 
-# 🟢 ถ้ามีข้อมูลจาก MT5 ถึงจะยอมประมวลผลเช็คออเดอร์ 🟢
-if df_m15 is not None and not df_m15.empty: 
+if not is_market_closed and df_m15 is not None: 
     check_pending_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
-sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics)
-sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment)
+# 🟢 ส่ง is_market_closed เข้าไปตัดบทการคำนวณ 🟢
+sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed)
+sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed)
 
 with st.sidebar:
     st.header("💻 War Room Terminal")
     layout_mode = st.radio("Display:", ["🖥️ Desktop", "📱 Mobile"])
     if st.button("Refresh Data", type="primary"): st.cache_data.clear()
-    
-    # 🟢 แสดงสถานะการเชื่อมต่อตรงแถบด้านซ้ายด้วย 🟢
     st.markdown("---")
-    st.markdown(f"**Status:** {market_status}")
-    st.markdown("---")
-    
     st.subheader("✍️ Override ข่าวเศรษฐกิจ")
     has_pending = False
     for i, ev in enumerate(final_news_list):
@@ -450,7 +462,7 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v12.0")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v12.1")
 
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
@@ -460,11 +472,16 @@ with c4: st.metric("US10Y", f"{metrics['US10Y'][0]:,.2f}", f"{metrics['US10Y'][1
 with c5: st.metric("SPDR Flow", get_spdr_flow())
 with c6: st.metric("Retail Senti.", f"S:{sentiment['short']}%", f"L:{sentiment['long']}%", delta_color="off")
 
+# 🟢 ป้ายเตือนสถานะตลาด (ตัวหนังสือเล็ก) วางไว้เหนือ Executive Summary 🟢
+if is_market_closed:
+    st.markdown(f"<div style='text-align: center; color: #ff4444; font-size: 14px; margin-top: -5px; margin-bottom: 15px;'>{status_msg}</div>", unsafe_allow_html=True)
+else:
+    st.markdown(f"<div style='text-align: center; color: #00ff00; font-size: 14px; margin-top: -5px; margin-bottom: 15px;'>{status_msg}</div>", unsafe_allow_html=True)
+
 st.markdown(f"<div class='exec-summary'>{generate_exec_summary(df_h4, metrics, next_red_news, sentiment)}</div>", unsafe_allow_html=True)
 
-# 🟢 ถ้าระบบขึ้นว่า MARKET CLOSED ให้ปิดการทำงาน EA Commander ไปด้วย 🟢
 ea_status_html = ""
-if "MARKET CLOSED" in sig_norm: ea_status_html = "<div style='color:#888; font-size:18px; font-weight:bold; margin-top:10px;'>🛑 EA OFFLINE: ตลาดปิด หรือ ขาดการเชื่อมต่อจาก MT5</div>"
+if "CLOSED" in sig_norm: ea_status_html = "<div style='color:#888; font-size:18px; font-weight:bold; margin-top:10px;'>🛑 EA OFFLINE: ตลาดปิด หรือ ขาดการเชื่อมต่อจาก MT5</div>"
 elif is_flash_crash: ea_status_html = "<div style='color:#ff3333; font-size:18px; font-weight:bold; margin-top:10px;'>🚨 EMERGENCY: ปิดการทำงาน Grid ทันที! เข้าโหมด Anti-Dump / Hard Cut</div>"
 elif "WAIT" in sig_norm or "PENDING" in sig_norm: ea_status_html = "<div style='color:#ffcc00; font-size:18px; font-weight:bold; margin-top:10px;'>⚠️ EA STANDBY: เข้าสู่โหมด Gold Down Pause หรือรอเข้าเทรดแบบ Limit</div>"
 else: ea_status_html = "<div style='color:#00ff00; font-size:18px; font-weight:bold; margin-top:10px;'>▶️ EA RUNNING: กางระบบ Grid Buy/Sell ได้ตามปกติ</div>"
@@ -500,7 +517,7 @@ with col_allin:
         """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
     
-    if setup_allin and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_allin, mode="All-In"), use_container_width=True)
+    if setup_allin and not is_market_closed and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_allin, mode="All-In"), use_container_width=True)
     else: st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #ff3333; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 ตลาดปิดทำการ หรือ EA ออฟไลน์...</div>" if "CLOSED" in sig_allin else "<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #ff3333; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังรอพายุสภาพคล่อง และการเกิด CHoCH...</div>", unsafe_allow_html=True)
 
 with col_normal:
@@ -525,7 +542,7 @@ with col_normal:
         """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    if setup_norm and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_norm, mode="Normal"), use_container_width=True)
+    if setup_norm and not is_market_closed and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_norm, mode="Normal"), use_container_width=True)
     else: st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #00ccff; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 ตลาดปิดทำการ หรือ EA ออฟไลน์...</div>" if "CLOSED" in sig_norm else "<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #00ccff; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังสแกนหา Setup ปกติ...</div>", unsafe_allow_html=True)
 
 st.write("---")
