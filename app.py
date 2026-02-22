@@ -16,7 +16,7 @@ import re
 import plotly.graph_objects as go
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v11.4", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v11.5", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -26,26 +26,24 @@ if 'pending_trades' not in st.session_state: st.session_state.pending_trades = [
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
 
-# 🟢 แก้ไข CSS บังคับขนาด 6 กล่องให้เท่ากันสวยงาม 🟢
+# 🟢 แก้ไข CSS: จัดชิดซ้าย และ บังคับกล่องให้เท่ากัน 🟢
 st.markdown("""
 <style>
     div[data-testid="stMetric"] {
         background-color: #1a1a2e; 
         border: 1px solid #00ccff; 
-        padding: 15px 10px; 
+        padding: 15px 15px; 
         border-radius: 8px; 
         box-shadow: 0 0 10px rgba(0,204,255,0.2);
-        text-align: center;
-        min-height: 110px;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
+        text-align: left; /* จัดชิดซ้ายตามเดิม */
+        height: 100%; /* บังคับความสูงให้เท่ากันหมด */
+        min-height: 115px;
     }
-    div[data-testid="stMetricValue"] {color: #00ccff; font-size: 22px; font-weight: bold; margin-top: 5px;}
-    .plan-card {background-color: #1a1a2e; padding: 20px; border-radius: 10px; border: 2px solid #00ccff; margin-bottom: 20px;}
-    .allin-card {background-color: #2b0000; padding: 20px; border-radius: 10px; border: 2px solid #ffcc00; margin-bottom: 20px;}
-    .ea-card {background-color: #1a1a2e; padding: 20px; border-radius: 10px; border: 2px solid #555; margin-bottom: 20px;}
-    .exec-summary {background-color: #131722; padding: 15px; border-radius: 8px; border-left: 5px solid #d4af37; margin-bottom: 20px;}
+    div[data-testid="stMetricValue"] {color: #00ccff; font-size: 24px; font-weight: bold; margin-top: 5px;}
+    .plan-card {background-color: #1a1a2e; padding: 20px; border-radius: 10px; border: 2px solid #00ccff; margin-bottom: 10px;}
+    .allin-card {background-color: #2b0000; padding: 20px; border-radius: 10px; border: 2px solid #ffcc00; margin-bottom: 10px;}
+    .ea-card {background-color: #111; padding: 20px; border-radius: 10px; border: 2px dashed #d4af37; margin-bottom: 25px; text-align: center;}
+    .exec-summary {background-color: #131722; padding: 15px; border-radius: 8px; border-left: 5px solid #d4af37; margin-bottom: 15px;}
     .ff-card {background-color: #222831; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #555;}
     .news-card {background-color: #131722; padding: 12px; border-radius: 8px; border-left: 4px solid #f0b90b; margin-bottom: 12px;}
     h2.title-header {text-align: center; margin-bottom: 20px; font-weight: bold;}
@@ -147,7 +145,6 @@ def get_retail_sentiment():
 @st.cache_data(ttl=3600)
 def get_spdr_flow(): return "Neutral" 
 
-# 🟢 คืนชีพคะแนน SMIS Score และเวลา ให้ข่าว 🟢
 @st.cache_data(ttl=900) 
 def get_categorized_news():
     translator = GoogleTranslator(source='en', target='th')
@@ -161,7 +158,6 @@ def get_categorized_news():
                 title_lower = entry.title.lower()
                 polarity = TextBlob(entry.title).sentiment.polarity
                 
-                # คำนวณ SMIS Score
                 base_score = abs(polarity) * 5
                 if any(kw in title_lower for kw in ['war', 'missile', 'strike', 'emergency', 'attack']): base_score += 4.0
                 elif any(kw in title_lower for kw in ['fed', 'inflation', 'rate']): base_score += 2.0
@@ -199,7 +195,6 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list):
     rsi = float(df_m15.iloc[-1]['rsi'])
     macd_hist = float(df_m15['MACDh_12_26_9'].iloc[-1]) if 'MACDh_12_26_9' in df_m15 else 0.0
 
-    # 🟢 Flash Crash Sensor 🟢
     current_m15 = df_m15.iloc[-1]
     red_body_size = current_m15['open'] - current_m15['close']
     is_flash_crash = True if (red_body_size >= 15.0) and ((current_m15['close'] - current_m15['low']) <= 3.0) else False
@@ -362,6 +357,11 @@ pol_news, war_news = get_categorized_news()
 
 if df_m15 is not None: check_pending_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
+# 🟢 ทำการคำนวณ Setup ทั้งหมดก่อน เพื่อเอาไปส่งให้ EA Commander 🟢
+sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list)
+sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment)
+
+# --- Sidebar ---
 with st.sidebar:
     st.header("💻 War Room Terminal")
     layout_mode = st.radio("Display:", ["🖥️ Desktop", "📱 Mobile"])
@@ -379,8 +379,9 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v11.4")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v11.5")
 
+# 🟢 กล่อง 6 ตัวเลข (ปรับ CSS ให้ชิดซ้ายและเท่ากันแล้ว) 🟢
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
 with c2: st.metric("GC=F", f"${metrics['GC_F'][0]:,.2f}", f"{metrics['GC_F'][1]:.2f}%")
@@ -391,12 +392,23 @@ with c6: st.metric("Retail Senti.", f"S:{sentiment['short']}%", f"L:{sentiment['
 
 st.markdown(f"<div class='exec-summary'>{generate_exec_summary(df_h4, metrics, next_red_news, sentiment)}</div>", unsafe_allow_html=True)
 
+# 🟢 ย้าย EA COMMANDER SYNC ออกมาเป็นกล่องใหญ่พาดเต็มจอตรงกลาง 🟢
+st.markdown('<div class="ea-card">', unsafe_allow_html=True)
+st.markdown('<h3 style="margin:0; color:#d4af37;">🤖 EA Commander Sync (The Defender)</h3>', unsafe_allow_html=True)
+if is_flash_crash:
+    st.markdown("<div style='color:#ff3333; font-size:18px; font-weight:bold; margin-top:10px;'>🚨 EMERGENCY: ปิดการทำงาน Grid ทันที! เข้าโหมด Anti-Dump / Hard Cut</div>", unsafe_allow_html=True)
+elif "WAIT" in sig_norm or "PENDING" in sig_norm:
+    st.markdown("<div style='color:#ffcc00; font-size:18px; font-weight:bold; margin-top:10px;'>⚠️ EA STANDBY: เข้าสู่โหมด Gold Down Pause หรือรอเข้าเทรดแบบ Limit</div>", unsafe_allow_html=True)
+else:
+    st.markdown("<div style='color:#00ff00; font-size:18px; font-weight:bold; margin-top:10px;'>▶️ EA RUNNING: กางระบบ Grid Buy/Sell ได้ตามปกติ</div>", unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# 🌟 จัดหน้าจอแบ่งซ้าย-ขวา 🌟
 col_allin, col_normal = st.columns(2)
 
+# ====== ฝั่งซ้าย: All-In ======
 with col_allin:
     st.markdown("<h2 class='title-header' style='color: #ffcc00;'>🎯 10-Strike All-In Protocol</h2>", unsafe_allow_html=True)
-    sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment)
-    
     if "ALL-IN" in sig_allin:
         curr_sig = f"ALLIN_{setup_allin.get('Entry','')}"
         if curr_sig != st.session_state.last_logged_setup:
@@ -423,10 +435,9 @@ with col_allin:
     if setup_allin and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_allin, mode="All-In"), use_container_width=True)
     else: st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #ff3333; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังรอพายุสภาพคล่อง และการเกิด CHoCH...</div>", unsafe_allow_html=True)
 
+# ====== ฝั่งขวา: Normal ======
 with col_normal:
     st.markdown("<h2 class='title-header' style='color: #00ccff;'>🃏 Normal Trade Mode</h2>", unsafe_allow_html=True)
-    sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list)
-    
     if "WAIT" not in sig_norm and setup_norm:
         curr_sig = f"NORM_{setup_norm.get('Entry','')}"
         if curr_sig != st.session_state.last_logged_setup:
@@ -450,17 +461,7 @@ with col_normal:
         """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 🟢 คืนชีพ EA Commander โดยประเมินจากตรรกะใน War Room ให้สอดคล้องกับ The Defender 🟢
-    st.markdown('<div class="ea-card">', unsafe_allow_html=True)
-    st.markdown('<h3 style="margin:0; color:#d4af37;">🤖 EA Commander Sync (The Defender)</h3>', unsafe_allow_html=True)
-    if is_flash_crash:
-        st.markdown("<div style='color:#ff3333; font-weight:bold; margin-top:10px;'>🚨 EMERGENCY: ปิดการทำงาน Grid ทันที! เข้าโหมด Anti-Dump / Hard Cut</div>", unsafe_allow_html=True)
-    elif "WAIT" in sig_norm or "PENDING" in sig_norm:
-        st.markdown("<div style='color:#ffcc00; font-weight:bold; margin-top:10px;'>⚠️ EA STANDBY: เข้าสู่โหมด Gold Down Pause หรือรอเข้าเทรดแบบ Limit</div>", unsafe_allow_html=True)
-    else:
-        st.markdown("<div style='color:#00ff00; font-weight:bold; margin-top:10px;'>▶️ EA RUNNING: กางระบบ Grid Buy/Sell ได้ตามปกติ</div>", unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
+    # 🟢 กราฟถูกย้ายขึ้นมาอยู่ใต้ Setup ทันที 🟢
     if setup_norm and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_norm, mode="Normal"), use_container_width=True)
     else: st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #00ccff; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังสแกนหา Setup ปกติ...</div>", unsafe_allow_html=True)
 
@@ -488,11 +489,9 @@ def display_intelligence():
             
     with tab_pol:
         for news in pol_news: 
-            # 🟢 อัปเกรด News Panel ให้แสดงเวลาและ SMIS Score 🟢
             st.markdown(f"<div class='news-card'><a href='{news['link']}' target='_blank' style='color:#fff;'>🇺🇸 {news['title_th']}</a><br><span style='font-size:11px; color:#888;'>🕒 {news['time']}</span><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | SMIS Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
     with tab_war:
         for news in war_news: 
-            # 🟢 อัปเกรด News Panel ให้แสดงเวลาและ SMIS Score 🟢
             st.markdown(f"<div class='news-card' style='border-color:#ff3333;'><a href='{news['link']}' target='_blank' style='color:#fff;'>⚠️ {news['title_th']}</a><br><span style='font-size:11px; color:#888;'>🕒 {news['time']}</span><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | SMIS Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
 
 tv_gold = f"""<div class="tradingview-widget-container"><div id="tv_gold"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});</script></div>"""
