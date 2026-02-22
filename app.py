@@ -14,18 +14,24 @@ from time import mktime
 from streamlit_autorefresh import st_autorefresh
 import re
 import plotly.graph_objects as go
+import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.3", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.8", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
 if 'last_logged_setup' not in st.session_state: st.session_state.last_logged_setup = ""
 if 'pending_trades' not in st.session_state: st.session_state.pending_trades = []
 if 'log_history' not in st.session_state: st.session_state.log_history = {} 
+if 'last_us_open_summary_date' not in st.session_state: st.session_state.last_us_open_summary_date = ""
 
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
+
+# 🟢 TELEGRAM API CONFIGURATION (พี่ตั้มไม่ต้องแก้แล้ว ผมใส่ให้เป๊ะๆ แล้วครับ) 🟢
+TELEGRAM_BOT_TOKEN = "8239625215:AAF7qUsz2O5mhINRhRYPTICljJsCErDDLD8"
+TELEGRAM_CHAT_ID = "5638824802" 
 
 st.markdown("""
 <style>
@@ -42,6 +48,23 @@ st.markdown("""
     .stTabs [aria-selected="true"] {background-color: #d4af37 !important; color: #000 !important; font-weight: bold;}
 </style>
 """, unsafe_allow_html=True)
+
+# 🟢 ฟังก์ชันส่ง Telegram Notify แบบรองรับรูปภาพกราฟ 🟢
+def send_telegram_notify(msg, image_path=None):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
+    
+    if image_path and os.path.exists(image_path):
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": msg}
+        with open(image_path, "rb") as image_file:
+            files = {"photo": image_file}
+            try: requests.post(url, data=data, files=files, timeout=10)
+            except: pass
+    else:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
+        try: requests.post(url, json=data, timeout=5)
+        except: pass
 
 # --- 2. DATA ENGINE ---
 @st.cache_data(ttl=30)
@@ -153,7 +176,7 @@ def get_categorized_news():
             feed = feedparser.parse(requests.get(f"https://news.google.com/rss/search?q={query}+when:24h&hl=en-US&gl=US&ceid=US:en", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).content)
             for entry in feed.entries[:5]: 
                 pub_time = mktime(entry.published_parsed)
-                date_str = datetime.datetime.fromtimestamp(pub_time).strftime('%d %b %Y | %H:%M น.')
+                date_str = datetime.datetime.fromtimestamp(pub_time).strftime('%d %b | %H:%M น.')
                 title_lower = entry.title.lower()
                 polarity = TextBlob(entry.title).sentiment.polarity
                 base_score = abs(polarity) * 5
@@ -172,6 +195,35 @@ def get_categorized_news():
         except: pass
         return news_list
     return fetch_rss("(Fed OR Powell OR Treasury)"), fetch_rss("(War OR Missile OR Israel OR Russia)")
+
+@st.cache_data(ttl=300) 
+def get_breaking_news():
+    translator = GoogleTranslator(source='en', target='th')
+    speed_news = []
+    urls = [
+        {"url": "https://www.forexlive.com/feed", "source": "ForexLive"},
+        {"url": "https://www.fxstreet.com/rss", "source": "FXStreet"}
+    ]
+    for source in urls:
+        try:
+            feed = feedparser.parse(requests.get(source['url'], headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).content)
+            for entry in feed.entries[:5]:
+                pub_time = mktime(entry.published_parsed)
+                date_str = datetime.datetime.fromtimestamp(pub_time).strftime('%d %b | %H:%M น.')
+                title_lower = entry.title.lower()
+                polarity = TextBlob(entry.title).sentiment.polarity
+                direction = "⚪ NEUTRAL"
+                if any(w in title_lower for w in ['gold', 'xau']):
+                    direction = "🟢 GOLD UP" if polarity > 0 else "🔴 GOLD DOWN"
+                elif any(w in title_lower for w in ['usd', 'dollar', 'fed']):
+                    direction = "🔴 GOLD DOWN (Strong USD)" if polarity > 0 else "🟢 GOLD UP (Weak USD)"
+                base_score = abs(polarity) * 5
+                if any(w in title_lower for w in ['urgent', 'breaking', 'alert', 'jump', 'drop', 'crash']): base_score += 5.0
+                final_score = min(10.0, max(1.0, base_score))
+                speed_news.append({'title_en': entry.title, 'title_th': translator.translate(entry.title), 'link': entry.link, 'time': date_str, 'score': final_score, 'direction': direction, 'source': source['source'], 'timestamp': pub_time})
+        except: pass
+    speed_news.sort(key=lambda x: x['timestamp'], reverse=True)
+    return speed_news[:10]
 
 # --- 4. CORE AI ---
 def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed):
@@ -297,7 +349,7 @@ def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_
 
     return "WAIT", "รอ...", {}, light
 
-# --- 6. AUTO-LOGGER & TIMESTAMP HELPER 🟢 ---
+# --- 6. AUTO-LOGGER & TELEGRAM NOTIFY ---
 def extract_price(text, is_long=True, is_entry=False):
     prices = [float(x) for x in re.findall(r'\d+\.\d+', str(text).replace(',', ''))]
     if not prices: return 0.0
@@ -305,7 +357,7 @@ def extract_price(text, is_long=True, is_entry=False):
     if is_entry: return max(prices) if is_long else min(prices)
     return prices[0]
 
-def log_new_trade(setup_type, sig, setup_data, reason_text):
+def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
     if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
     hist = st.session_state.log_history.get(setup_type)
     now = time.time()
@@ -314,6 +366,7 @@ def log_new_trade(setup_type, sig, setup_data, reason_text):
     st.session_state.log_history[setup_type] = {'time': now, 'signal': sig}
     try:
         trade_id = f"TRD-{int(time.time())}"
+        thai_dt_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=7)).strftime("%d %b %Y %H:%M")
         now_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S")
         clean_reason = re.sub('<[^<]+>', '', reason_text).strip()
         is_long = "LONG" in sig or "BUY" in sig
@@ -334,27 +387,32 @@ def log_new_trade(setup_type, sig, setup_data, reason_text):
         internal_trade['entry_val'] = entry_val
         internal_trade['sl_val'] = sl_val
         internal_trade['tp_val'] = tp_val
+        internal_trade['display_time'] = thai_dt_str
+        internal_trade['display_entry'] = setup_data.get('Entry', '')
+        internal_trade['display_tp'] = setup_data.get('TP', '')
+        internal_trade['display_sl'] = setup_data.get('SL', '')
+        internal_trade['display_reason'] = clean_reason
 
         requests.post(GOOGLE_SHEET_API_URL, json=payload, timeout=3)
         st.session_state.pending_trades.append(internal_trade)
-    except: pass
+        
+        img_path = "setup_chart.png"
+        fig = plot_setup_chart(df_m15, setup_data, mode="All-In" if "All-In" in setup_type else "Normal")
+        if fig:
+            try: fig.write_image(img_path)
+            except: img_path = None
 
-# 🟢 ฟังก์ชันดึงเวลาที่พบ Setup ครั้งแรกมาโชว์บนหน้าจอ 🟢
-def get_setup_time_html(setup_type, current_sig, base_color):
-    hist = st.session_state.log_history.get(setup_type)
-    if hist and hist['signal'] == current_sig:
-        utc_dt = datetime.datetime.utcfromtimestamp(hist['time'])
-        thai_dt = utc_dt + datetime.timedelta(hours=7)
-        elapsed_mins = int((time.time() - hist['time']) / 60)
+        # 🟢 รูปแบบข้อความของ Telegram 🟢
+        tg_msg = f"🎯 [NEW SETUP] {thai_dt_str}\n\n"
+        tg_msg += f"Mode: {setup_type}\n"
+        tg_msg += f"Signal: {sig}\n"
+        tg_msg += f"Entry: {internal_trade['display_entry']}\n"
+        tg_msg += f"Why?: {clean_reason}\n"
+        tg_msg += f"Tp: {internal_trade['display_tp']}\n"
+        tg_msg += f"Sl: {internal_trade['display_sl']}"
+        send_telegram_notify(tg_msg, img_path)
         
-        # ถ้านานเกิน 45 นาที ให้ขึ้นเตือนตัวแดง!
-        is_stale = elapsed_mins >= 45
-        warn_color = "#ff4444" if is_stale else base_color
-        warn_icon = "⚠️" if is_stale else "🕒"
-        warn_text = f" ({elapsed_mins} นาทีที่แล้ว - ระวัง! Setup เก่าอาจจบไปแล้ว)" if is_stale else f" ({elapsed_mins} นาทีที่แล้ว)"
-        
-        return f"<div style='font-size:13px; color:{warn_color}; margin-top:8px; padding-top:8px; border-top:1px dashed #444;'>{warn_icon} <b>Signal Time:</b> {thai_dt.strftime('%d %b %Y | %H:%M น.')} {warn_text}</div>"
-    return ""
+    except Exception as e: print("Log Error:", e)
 
 def check_pending_trades(current_high, current_low):
     if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
@@ -379,10 +437,19 @@ def check_pending_trades(current_high, current_low):
                 if current_high >= sl_p: result = "LOSS ❌"
                 elif current_low <= tp_p: result = "WIN 🎯"
             if result:
-                try:
-                    requests.post(GOOGLE_SHEET_API_URL, json={"action": "update", "id": trade['id'], "result": result}, timeout=3)
-                    trades_to_remove.append(trade)
+                try: requests.post(GOOGLE_SHEET_API_URL, json={"action": "update", "id": trade['id'], "result": result}, timeout=3)
                 except: pass
+                
+                # 🟢 ส่งผลลัพธ์เข้า Telegram 🟢
+                tg_msg = f"🏁 [RESULT] {trade.get('display_time', '')}\n\n"
+                tg_msg += f"Signal: {trade.get('signal', '')}\n"
+                tg_msg += f"Entry: {trade.get('display_entry', '')}\n"
+                tg_msg += f"Why?: {trade.get('display_reason', '')}\n"
+                tg_msg += f"Tp: {trade.get('display_tp', '')}\n"
+                tg_msg += f"Sl: {trade.get('display_sl', '')}\n\n"
+                tg_msg += f"✨ Result: {result}"
+                send_telegram_notify(tg_msg)
+                trades_to_remove.append(trade)
                 
     for t in trades_to_remove:
         if t in st.session_state.pending_trades: st.session_state.pending_trades.remove(t)
@@ -397,6 +464,42 @@ def generate_exec_summary(df_h4, metrics, next_red_news, sentiment):
     if next_red_news: summary += f"<br>⚠️ **News Alert:** ระวังความผันผวนจากข่าว **{next_red_news['title']}** ในอีก {next_red_news['hours']:.1f} ชั่วโมง"
     else: summary += "<br>✅ **News Alert:** ไม่มีข่าวกล่องแดงกวนใจ สามารถรันเทรนด์ Grid ได้ตามปกติ"
     return summary
+
+def generate_telegram_us_briefing(df_h4, metrics, sentiment, final_news_list, war_news):
+    now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+    trend = "ไม่สามารถวิเคราะห์ได้ (ไม่มีข้อมูล)"
+    if df_h4 is not None: trend = "ขาขึ้น 🟢" if df_h4.iloc[-2]['close'] > ta.ema(df_h4['close'], length=50).iloc[-2] else "ขาลง 🔴"
+    
+    dxy_status = "อ่อนค่า 🟢" if metrics['DXY'][1] < 0 else "แข็งค่า 🔴"
+    us10y_status = "ปรับตัวลง 🟢" if metrics['US10Y'][1] < 0 else "พุ่งขึ้น 🔴"
+    gcf_status = "ซื้อเก็บ 🟢" if metrics['GC_F'][1] > 0 else "เทขาย 🔴"
+    senti_status = "หนุนทองขึ้น 🟢" if sentiment['short'] > 50 else "กดดันทองลง 🔴"
+    
+    today_news_str = ""
+    for ev in final_news_list:
+        if ev['dt'].date() == now_thai.date() and ev['impact'] == 'High':
+            today_news_str += f"- {ev['time']} น. : {ev['title']}\n"
+    if not today_news_str: today_news_str = "- ไม่มีข่าวกล่องแดงคืนนี้ ✅\n"
+    
+    geo_str = "- สงบสุข ไม่มีข่าวฉุกเฉิน ⚪"
+    if war_news: geo_str = f"- {war_news[0]['title_th']} (Impact: {war_news[0]['score']:.1f}/10) {war_news[0]['direction']}"
+
+    # 🟢 รูปแบบข้อความสำหรับ Telegram 🟢
+    msg = f"🗽🇺🇸 US Session Briefing 🇺🇸🗽\n"
+    msg += f"ประจำวันที่: {now_thai.strftime('%d %b %Y | 19:30 น.')}\n\n"
+    msg += f"📊 [Technical]\n"
+    msg += f"Trend H4: {trend}\n"
+    msg += f"XAUUSD (Live): ${metrics['GOLD'][0]:.2f}\n\n"
+    msg += f"💵 [Macro / 5 Pillars]\n"
+    msg += f"DXY: {metrics['DXY'][0]:.2f} ({dxy_status})\n"
+    msg += f"US10Y: {metrics['US10Y'][0]:.2f}% ({us10y_status})\n"
+    msg += f"GC=F (Premium): {gcf_status}\n\n"
+    msg += f"🐑 [Retail Sentiment]\n"
+    msg += f"S:{sentiment['short']}% / L:{sentiment['long']}% ({senti_status})\n\n"
+    msg += f"📅 [US Economic News Tonight]\n{today_news_str}\n"
+    msg += f"⚠️ [Geo-Politics]\n{geo_str}\n\n"
+    msg += f"🤖 AI Prediction: หากโครงสร้างไม่เปลี่ยน แนะนำให้หาจุดเข้าฝั่ง {trend.replace('🟢','').replace('🔴','').strip()}"
+    return msg
 
 # --- 8. VISUALIZER ---
 def plot_setup_chart(df, setup_dict, mode="Normal"):
@@ -426,6 +529,19 @@ def plot_setup_chart(df, setup_dict, mode="Normal"):
     fig.update_layout(template='plotly_dark', margin=dict(l=10, r=50, t=10, b=10), height=350, xaxis_rangeslider_visible=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     return fig
 
+def get_setup_time_html(setup_type, current_sig, base_color):
+    hist = st.session_state.log_history.get(setup_type)
+    if hist and hist['signal'] == current_sig:
+        utc_dt = datetime.datetime.utcfromtimestamp(hist['time'])
+        thai_dt = utc_dt + datetime.timedelta(hours=7)
+        elapsed_mins = int((time.time() - hist['time']) / 60)
+        is_stale = elapsed_mins >= 45
+        warn_color = "#ff4444" if is_stale else base_color
+        warn_icon = "⚠️" if is_stale else "🕒"
+        warn_text = f" ({elapsed_mins} นาทีที่แล้ว - ระวัง! Setup เก่าอาจจบไปแล้ว)" if is_stale else f" ({elapsed_mins} นาทีที่แล้ว)"
+        return f"<div style='font-size:13px; color:{warn_color}; margin-top:8px; padding-top:8px; border-top:1px dashed #444;'>{warn_icon} <b>Signal Time:</b> {thai_dt.strftime('%d %b %Y | %H:%M น.')} {warn_text}</div>"
+    return ""
+
 # --- UI MAIN ---
 metrics, df_m15, df_h4, mt5_news = get_market_data()
 is_market_closed, status_msg = check_market_status(df_m15)
@@ -434,12 +550,20 @@ ff_raw_news = get_forexfactory_usd()
 final_news_list, next_red_news = merge_news_sources(mt5_news, ff_raw_news)
 sentiment = get_retail_sentiment()
 pol_news, war_news = get_categorized_news() 
+speed_news = get_breaking_news()
 
 if not is_market_closed and df_m15 is not None: 
     check_pending_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
 sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed)
 sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed)
+
+now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+current_date_str = now_thai.strftime("%Y-%m-%d")
+if not is_market_closed and now_thai.hour == 19 and now_thai.minute >= 30 and st.session_state.last_us_open_summary_date != current_date_str:
+    us_briefing_msg = generate_telegram_us_briefing(df_h4, metrics, sentiment, final_news_list, war_news)
+    send_telegram_notify(us_briefing_msg)
+    st.session_state.last_us_open_summary_date = current_date_str
 
 with st.sidebar:
     st.header("💻 War Room Terminal")
@@ -462,7 +586,7 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v12.3")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v12.8")
 
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
@@ -487,14 +611,8 @@ if "CLOSED" in sig_norm:
 elif is_flash_crash: 
     ea_status_html = "<div style='color:#ff3333; font-size:18px; font-weight:bold; margin-top:10px;'>🚨 EMERGENCY: ปิดการทำงาน Grid ทันที! เข้าโหมด Anti-Dump / Hard Cut</div>"
     siren_html = """
-    <audio id="siren_audio" autoplay loop>
-        <source src="https://actions.google.com/sounds/v1/alarms/air_raid_siren.ogg" type="audio/ogg">
-    </audio>
-    <script>
-        var siren = document.getElementById("siren_audio");
-        siren.volume = 1.0;
-        setTimeout(function(){ siren.pause(); }, 15000);
-    </script>
+    <audio id="siren_audio" autoplay loop><source src="https://actions.google.com/sounds/v1/alarms/air_raid_siren.ogg" type="audio/ogg"></audio>
+    <script>var siren = document.getElementById("siren_audio"); siren.volume = 1.0; setTimeout(function(){ siren.pause(); }, 15000);</script>
     """
 elif "WAIT" in sig_norm or "PENDING" in sig_norm: 
     ea_status_html = "<div style='color:#ffcc00; font-size:18px; font-weight:bold; margin-top:10px;'>⚠️ EA STANDBY: เข้าสู่โหมด Gold Down Pause หรือรอเข้าเทรดแบบ Limit</div>"
@@ -508,18 +626,16 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-if siren_html:
-    st.components.v1.html(siren_html, width=0, height=0)
+if siren_html: st.components.v1.html(siren_html, width=0, height=0)
 
 col_allin, col_normal = st.columns(2)
 
 with col_allin:
     st.markdown("<h2 class='title-header' style='color: #ffcc00;'>🎯 10-Strike All-In Protocol</h2>", unsafe_allow_html=True)
-    
     time_html_allin = ""
     if "ALL-IN" in sig_allin: 
-        log_new_trade("All-In Setup", sig_allin, setup_allin, reason_allin)
-        time_html_allin = get_setup_time_html("All-In Setup", sig_allin, "#ffcc00") # 🟢 เรียกฟังก์ชันแสดงเวลา 🟢
+        log_new_trade("All-In Setup", sig_allin, setup_allin, reason_allin, df_m15)
+        time_html_allin = get_setup_time_html("All-In Setup", sig_allin, "#ffcc00")
             
     st.markdown(f"""
     <div class="allin-card">
@@ -544,11 +660,10 @@ with col_allin:
 
 with col_normal:
     st.markdown("<h2 class='title-header' style='color: #00ccff;'>🃏 Normal Trade Mode</h2>", unsafe_allow_html=True)
-    
     time_html_norm = ""
     if "WAIT" not in sig_norm and "CLOSED" not in sig_norm and setup_norm: 
-        log_new_trade("Normal Setup", sig_norm, setup_norm, reason_norm)
-        time_html_norm = get_setup_time_html("Normal Setup", sig_norm, "#00ccff") # 🟢 เรียกฟังก์ชันแสดงเวลา 🟢
+        log_new_trade("Normal Setup", sig_norm, setup_norm, reason_norm, df_m15)
+        time_html_norm = get_setup_time_html("Normal Setup", sig_norm, "#00ccff")
             
     st.markdown(f"""
     <div class="plan-card">
@@ -575,7 +690,7 @@ st.write("---")
 
 def display_intelligence():
     st.subheader("📰 Global Intelligence Hub")
-    tab_eco, tab_pol, tab_war = st.tabs(["📅 ข่าวเศรษฐกิจ (Merged Data)", "🏛️ การเมือง & Fed", "⚔️ สงคราม"])
+    tab_eco, tab_pol, tab_war, tab_speed = st.tabs(["📅 ข่าวเศรษฐกิจ (Merged Data)", "🏛️ การเมือง & Fed", "⚔️ สงคราม", "⚡ ข่าวด่วน (Breaking News)"])
     
     with tab_eco:
         if final_news_list:
@@ -599,6 +714,12 @@ def display_intelligence():
     with tab_war:
         for news in war_news: 
             st.markdown(f"<div class='news-card' style='border-color:#ff3333;'><a href='{news['link']}' target='_blank' style='color:#fff;'>⚠️ {news['title_th']}</a><br><span style='font-size:11px; color:#888;'>🕒 {news['time']}</span><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | SMIS Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
+    with tab_speed:
+        if speed_news:
+            for news in speed_news:
+                st.markdown(f"<div class='news-card' style='border-color:#00ccff;'><a href='{news['link']}' target='_blank' style='color:#fff;'>🔥 [{news['source']}] {news['title_th']}</a><br><span style='font-size:11px; color:#888;'>🕒 {news['time']}</span><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | SMIS Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
+        else:
+            st.write("กำลังสแกนหาข่าวด่วน...")
 
 tv_gold = f"""<div class="tradingview-widget-container"><div id="tv_gold"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});</script></div>"""
 tv_dxy = f"""<div class="tradingview-widget-container"><div id="tv_dxy"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "CAPITALCOM:DXY", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_dxy"}});</script></div>"""
