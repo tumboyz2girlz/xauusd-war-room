@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.9", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.10", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -589,9 +589,11 @@ with st.sidebar:
     st.header("💻 War Room Terminal")
     layout_mode = st.radio("Display:", ["🖥️ Desktop", "📱 Mobile"])
     if st.button("Refresh Data", type="primary"): st.cache_data.clear()
+    
     st.markdown("---")
     st.markdown(f"**Status:** {status_msg}")
     st.markdown("---")
+    
     st.subheader("✍️ Override ข่าวเศรษฐกิจ")
     has_pending = False
     for i, ev in enumerate(final_news_list):
@@ -604,7 +606,7 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v12.9")
+st.title("🦅 XAUUSD WAR Room: Institutional Master Node v12.10")
 
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
@@ -706,35 +708,25 @@ with col_normal:
 
 st.write("---")
 
-# --- HTML สำหรับ TradingView ---
-tv_gold_html = """
-<div class="tradingview-widget-container">
-  <div id="tv_gold"></div>
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-  <script type="text/javascript">
-  new TradingView.widget({
-    "width": "100%", "height": %d, "symbol": "OANDA:XAUUSD", "interval": "15",
-    "theme": "dark", "style": "1", "container_id": "tv_gold"
-  });
-  </script>
-</div>
-"""
-tv_dxy_html = """
-<div class="tradingview-widget-container">
-  <div id="tv_dxy"></div>
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-  <script type="text/javascript">
-  new TradingView.widget({
-    "width": "100%", "height": %d, "symbol": "CAPITALCOM:DXY", "interval": "15",
-    "theme": "dark", "style": "1", "container_id": "tv_dxy"
-  });
-  </script>
-</div>
-"""
+# 🟢 สร้างฟังก์ชันเล็กๆ สำหรับวาดกราฟ TradingView อย่างปลอดภัย 🟢
+def get_tv_html(symbol, height):
+    return f"""
+    <div class="tradingview-widget-container">
+      <div id="tv_{symbol.replace(':','_')}"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+      new TradingView.widget({{
+        "width": "100%", "height": {height}, "symbol": "{symbol}", "interval": "15",
+        "theme": "dark", "style": "1", "container_id": "tv_{symbol.replace(':','_')}"
+      }});
+      </script>
+    </div>
+    """
 
 def display_intelligence():
     st.subheader("📰 Global Intelligence Hub")
     tab_eco, tab_pol, tab_war, tab_speed = st.tabs(["📅 ข่าวเศรษฐกิจ (Merged Data)", "🏛️ การเมือง & Fed", "⚔️ สงคราม", "⚡ ข่าวด่วน (Breaking News)"])
+    
     with tab_eco:
         if final_news_list:
             for ev in final_news_list:
@@ -750,6 +742,7 @@ def display_intelligence():
                 </div>
                 """, unsafe_allow_html=True)
         else: st.write("ไม่มีข่าวเศรษฐกิจสำคัญในช่วงนี้")
+            
     with tab_pol:
         for news in pol_news: 
             st.markdown(f"<div class='news-card'><a href='{news['link']}' target='_blank' style='color:#fff;'>🇺🇸 {news['title_th']}</a><br><span style='font-size:11px; color:#888;'>🕒 {news['time']}</span><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | SMIS Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
@@ -760,19 +753,18 @@ def display_intelligence():
         if speed_news:
             for news in speed_news:
                 st.markdown(f"<div class='news-card' style='border-color:#00ccff;'><a href='{news['link']}' target='_blank' style='color:#fff;'>🔥 [{news['source']}] {news['title_th']}</a><br><span style='font-size:11px; color:#888;'>🕒 {news['time']}</span><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | SMIS Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
-        else: st.write("กำลังสแกนหาข่าวด่วน...")
+        else:
+            st.write("กำลังสแกนหาข่าวด่วน...")
 
 if layout_mode == "🖥️ Desktop":
     col_chart_bot, col_news_bot = st.columns([1.8, 1])
     with col_chart_bot:
         tab_chart_gold, tab_chart_dxy = st.tabs(["🥇 XAUUSD", "💵 DXY"])
-        with tab_chart_gold: st.components.v1.html(tv_gold_html % 600, height=600)
-        with tab_chart_dxy: st.components.v1.html(tv_dxy_html % 600, height=600)
+        with tab_chart_gold: st.components.v1.html(get_tv_html("OANDA:XAUUSD", 600), height=600)
+        with tab_chart_dxy: st.components.v1.html(get_tv_html("CAPITALCOM:DXY", 600), height=600)
     with col_news_bot: display_intelligence()
 else:
     tab_chart_gold, tab_chart_dxy = st.tabs(["🥇 XAUUSD", "💵 DXY"])
-    with tab_chart_gold: st.components.v1.html(tv_gold_html % 400, height=400)
-    with tab_chart_dxy: st.components.v1.html(tv_dxy_html % 400, height=400)
+    with tab_chart_gold: st.components.v1.html(get_tv_html("OANDA:XAUUSD", 400), height=400)
+    with tab_chart_dxy: st.components.v1.html(get_tv_html("CAPITALCOM:DXY", 400), height=400)
     display_intelligence()
-
-# --- END OF CODE ---
