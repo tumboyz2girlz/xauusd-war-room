@@ -16,7 +16,7 @@ import re
 import plotly.graph_objects as go
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v11.3", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v11.4", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -24,20 +24,33 @@ if 'last_logged_setup' not in st.session_state: st.session_state.last_logged_set
 if 'pending_trades' not in st.session_state: st.session_state.pending_trades = []
 
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
-
-# 🔴 ใส่ URL Google Sheets ของพี่ตั้มตรงนี้ 🔴
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
 
+# 🟢 แก้ไข CSS บังคับขนาด 6 กล่องให้เท่ากันสวยงาม 🟢
 st.markdown("""
 <style>
-    div[data-testid="stMetric"] {background-color: #1a1a2e; border: 1px solid #00ccff; padding: 10px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,204,255,0.2);}
-    div[data-testid="stMetricValue"] {color: #00ccff; font-size: 20px; font-weight: bold;}
-    .plan-card {background-color: #1a1a2e; padding: 20px; border-radius: 10px; border: 2px solid #00ccff; margin-bottom: 20px; height: 100%;}
-    .allin-card {background-color: #2b0000; padding: 20px; border-radius: 10px; border: 2px solid #ffcc00; margin-bottom: 20px; height: 100%;}
+    div[data-testid="stMetric"] {
+        background-color: #1a1a2e; 
+        border: 1px solid #00ccff; 
+        padding: 15px 10px; 
+        border-radius: 8px; 
+        box-shadow: 0 0 10px rgba(0,204,255,0.2);
+        text-align: center;
+        min-height: 110px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    div[data-testid="stMetricValue"] {color: #00ccff; font-size: 22px; font-weight: bold; margin-top: 5px;}
+    .plan-card {background-color: #1a1a2e; padding: 20px; border-radius: 10px; border: 2px solid #00ccff; margin-bottom: 20px;}
+    .allin-card {background-color: #2b0000; padding: 20px; border-radius: 10px; border: 2px solid #ffcc00; margin-bottom: 20px;}
+    .ea-card {background-color: #1a1a2e; padding: 20px; border-radius: 10px; border: 2px solid #555; margin-bottom: 20px;}
     .exec-summary {background-color: #131722; padding: 15px; border-radius: 8px; border-left: 5px solid #d4af37; margin-bottom: 20px;}
     .ff-card {background-color: #222831; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #555;}
     .news-card {background-color: #131722; padding: 12px; border-radius: 8px; border-left: 4px solid #f0b90b; margin-bottom: 12px;}
     h2.title-header {text-align: center; margin-bottom: 20px; font-weight: bold;}
+    .stTabs [data-baseweb="tab"] {background-color: #1a1a2e; border-radius: 5px 5px 0 0;}
+    .stTabs [aria-selected="true"] {background-color: #d4af37 !important; color: #000 !important; font-weight: bold;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -46,7 +59,6 @@ st.markdown("""
 def get_market_data():
     metrics = {'GOLD': (0.0, 0.0), 'GC_F': (0.0, 0.0), 'DXY': (0.0, 0.0), 'US10Y': (0.0, 0.0)}
     df_m15, df_h4, mt5_news = None, None, []
-    
     try:
         res = requests.get(FIREBASE_URL, timeout=5)
         if res.status_code == 200 and res.json() is not None:
@@ -133,8 +145,9 @@ def get_retail_sentiment():
     except: return {"short": 50, "long": 50}
 
 @st.cache_data(ttl=3600)
-def get_spdr_flow(): return "Neutral" # 🟢 คืนชีพ SPDR
+def get_spdr_flow(): return "Neutral" 
 
+# 🟢 คืนชีพคะแนน SMIS Score และเวลา ให้ข่าว 🟢
 @st.cache_data(ttl=900) 
 def get_categorized_news():
     translator = GoogleTranslator(source='en', target='th')
@@ -144,24 +157,34 @@ def get_categorized_news():
             feed = feedparser.parse(requests.get(f"https://news.google.com/rss/search?q={query}+when:24h&hl=en-US&gl=US&ceid=US:en", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).content)
             for entry in feed.entries[:5]: 
                 pub_time = mktime(entry.published_parsed)
-                date_str = datetime.datetime.fromtimestamp(pub_time).strftime('%d %b %H:%M')
+                date_str = datetime.datetime.fromtimestamp(pub_time).strftime('%d %b %Y | %H:%M น.')
                 title_lower = entry.title.lower()
                 polarity = TextBlob(entry.title).sentiment.polarity
+                
+                # คำนวณ SMIS Score
+                base_score = abs(polarity) * 5
+                if any(kw in title_lower for kw in ['war', 'missile', 'strike', 'emergency', 'attack']): base_score += 4.0
+                elif any(kw in title_lower for kw in ['fed', 'inflation', 'rate']): base_score += 2.0
+                final_score = min(10.0, max(1.0, base_score))
+
                 direction = "⚪ NEUTRAL"
-                if any(w in title_lower for w in ['war', 'missile', 'strike', 'attack']): direction = "🟢 GOLD UP (Safe Haven)"
+                if any(w in title_lower for w in ['war', 'missile', 'strike', 'attack', 'escalat']): direction = "🟢 GOLD UP (Safe Haven)"
                 elif any(w in title_lower for w in ['ceasefire', 'peace']): direction = "🔴 GOLD DOWN (Risk-On)"
                 elif any(w in title_lower for w in ['rate hike', 'hawkish']): direction = "🔴 GOLD DOWN (Strong USD)"
                 elif any(w in title_lower for w in ['rate cut', 'dovish']): direction = "🟢 GOLD UP (Weak Econ)"
-                news_list.append({'title_en': entry.title, 'title_th': translator.translate(entry.title), 'link': entry.link, 'time': date_str, 'direction': direction})
+                else:
+                    if polarity <= -0.2: direction = "🟢 GOLD UP (Negative/Panic)"
+                    elif polarity >= 0.2: direction = "🔴 GOLD DOWN (Positive/Calm)"
+
+                news_list.append({'title_en': entry.title, 'title_th': translator.translate(entry.title), 'link': entry.link, 'time': date_str, 'score': final_score, 'direction': direction})
         except: pass
         return news_list
     return fetch_rss("(Fed OR Powell OR Treasury)"), fetch_rss("(War OR Missile OR Israel OR Russia)")
 
-# --- 4. CORE AI (NORMAL MODE + FULL QUANT LOGIC) ---
+# --- 4. CORE AI (NORMAL MODE + FLASH CRASH SENSOR) ---
 def calculate_normal_setup(df_m15, df_h4, final_news_list):
-    if df_m15 is None or df_h4 is None: return "WAIT", "No Data", {}
+    if df_m15 is None or df_h4 is None: return "WAIT", "No Data", {}, False
     
-    # คำนวณ Trend, Momentum, Volatility
     df_h4['ema50'] = ta.ema(df_h4['close'], length=50)
     df_m15['ema50'] = ta.ema(df_m15['close'], length=50)
     df_m15['atr'] = ta.atr(df_m15['high'], df_m15['low'], df_m15['close'], length=14)
@@ -176,7 +199,11 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list):
     rsi = float(df_m15.iloc[-1]['rsi'])
     macd_hist = float(df_m15['MACDh_12_26_9'].iloc[-1]) if 'MACDh_12_26_9' in df_m15 else 0.0
 
-    # 🟢 คืนชีพ SMC FVG Logic
+    # 🟢 Flash Crash Sensor 🟢
+    current_m15 = df_m15.iloc[-1]
+    red_body_size = current_m15['open'] - current_m15['close']
+    is_flash_crash = True if (red_body_size >= 15.0) and ((current_m15['close'] - current_m15['low']) <= 3.0) else False
+
     def get_smc_setup(df, trend_dir):
         df_recent = df.tail(40).reset_index(drop=True)
         atr_smc = df_recent['atr'].iloc[-1]
@@ -190,7 +217,6 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list):
 
     smc_found, smc_entry, smc_sl, smc_tp = get_smc_setup(df_m15, trend_m15)
     
-    # เช็ค News Conflict
     recent_news_dir = ""
     for ev in final_news_list:
         if ev['source'] == 'MT5' and ev['direction'] and -2.0 <= ev['time_diff_hours'] <= 0:
@@ -198,32 +224,35 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list):
             elif "DOWN" in ev['direction']: recent_news_dir = "DOWN"
             break
 
-    # ประมวลผลลัพธ์
-    if trend_h4 == "UP" and trend_m15 == "UP":
-        if recent_news_dir == "DOWN": return "WAIT (News Conflict ⚠️)", "เทรนด์ขาขึ้น แต่ข่าว MT5 ล่าสุดกดดันทองลง", {}
+    if is_flash_crash:
+        setup = {'Entry': f"กด Sell ทันที หรือรอเด้งโซน ${current_m15['close'] + (0.5*atr):.2f}", 'SL': f"${current_m15['open'] + (0.5*atr):.2f}", 'TP': f"${current_m15['close'] - (3*atr):.2f}"}
+        return "🚨 FLASH CRASH (SELL NOW!)", f"ตรวจพบการเทขายแดงเต็มแท่งดิ่งลง ${red_body_size:.2f} สั่งแทง SELL ตามน้ำ!", setup, True
+
+    elif trend_h4 == "UP" and trend_m15 == "UP":
+        if recent_news_dir == "DOWN": return "WAIT (News Conflict ⚠️)", "เทรนด์ขาขึ้น แต่ข่าว MT5 ล่าสุดกดดันทองลง", {}, False
         elif rsi > 70: 
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema-(0.5*atr):.2f}", 'SL': f"${ema-(2*atr):.2f}", 'TP': f"${ema+(2*atr):.2f}"}
-            return "PENDING LONG", f"RSI ทะลุ {rsi:.1f} (Overbought) ห้ามไล่ราคา! ให้ตั้ง Buy Limit รอย่อ", setup
+            return "PENDING LONG", f"RSI ทะลุ {rsi:.1f} (Overbought) ห้ามไล่ราคา! ให้ตั้ง Buy Limit รอย่อ", setup, False
         else:
             reason = "โครงสร้าง 5 Pillars สนับสนุนขาขึ้น"
             reason += " + 🚀 MACD หนุน" if macd_hist > 0 else " + 🐌 MACD เริ่มอ่อนแรง"
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema:.2f} (EMA)", 'SL': f"${ema-(2*atr):.2f}", 'TP': f"${ema+(2*atr):.2f}"}
-            return "LONG", reason, setup
+            return "LONG", reason, setup, False
 
     elif trend_h4 == "DOWN" and trend_m15 == "DOWN":
-        if recent_news_dir == "UP": return "WAIT (News Conflict ⚠️)", "เทรนด์ขาลง แต่ข่าว MT5 ล่าสุดหนุนทองขึ้น", {}
+        if recent_news_dir == "UP": return "WAIT (News Conflict ⚠️)", "เทรนด์ขาลง แต่ข่าว MT5 ล่าสุดหนุนทองขึ้น", {}, False
         elif rsi < 30: 
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema+(0.5*atr):.2f}", 'SL': f"${ema+(2*atr):.2f}", 'TP': f"${ema-(2*atr):.2f}"}
-            return "PENDING SHORT", f"RSI ตกไปที่ {rsi:.1f} (Oversold) ห้ามกด Sell ก้นเหว! ตั้ง Sell Limit รอเด้ง", setup
+            return "PENDING SHORT", f"RSI ตกไปที่ {rsi:.1f} (Oversold) ห้ามกด Sell ก้นเหว! ตั้ง Sell Limit รอเด้ง", setup, False
         else:
             reason = "โครงสร้าง 5 Pillars สนับสนุนขาลง"
             reason += " + 🚀 MACD หนุน" if macd_hist < 0 else " + 🐌 MACD เริ่มอ่อนแรง"
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema:.2f} (EMA)", 'SL': f"${ema+(2*atr):.2f}", 'TP': f"${ema-(2*atr):.2f}"}
-            return "SHORT", reason, setup
+            return "SHORT", reason, setup, False
             
-    return "WAIT", "H1/H4 Trend ไม่ตรงกับ M15", {}
+    return "WAIT", "H1/H4 Trend ไม่ตรงกับ M15", {}, False
 
-# --- 5. AI 10-STRIKE ALL-IN PROTOCOL (Sniper Mode) ---
+# --- 5. AI 10-STRIKE ALL-IN PROTOCOL ---
 def detect_choch_and_sweep(df):
     recent = df.tail(20).reset_index(drop=True)
     if len(recent) < 20: return False, "", 0, 0
@@ -268,7 +297,7 @@ def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment):
 
     return "WAIT", "รอ...", {}, light
 
-# --- 6. AUTO-LOGGER (Google Sheets) ---
+# --- 6. AUTO-LOGGER ---
 def log_new_trade(setup_type, sig, setup_data, reason_text):
     if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
     try:
@@ -295,21 +324,15 @@ def check_pending_trades(current_high, current_low):
         except: continue
     for t in trades_to_remove: st.session_state.pending_trades.remove(t)
 
-# --- 7. EXECUTIVE SUMMARY GENERATOR ---
+# --- 7. EXECUTIVE SUMMARY ---
 def generate_exec_summary(df_h4, metrics, next_red_news, sentiment):
     if df_h4 is None: return "กำลังรวบรวมข้อมูล..."
     trend = "ขาขึ้น 🟢" if df_h4.iloc[-2]['close'] > ta.ema(df_h4['close'], length=50).iloc[-2] else "ขาลง 🔴"
     dxy_status = "อ่อนค่า (หนุนทอง)" if metrics['DXY'][1] < 0 else "แข็งค่า (กดดันทอง)"
-    
-    summary = f"**📊 Overall Market Bias:** ขณะนี้ทองคำอยู่ในโครงสร้างเทรนด์ **{trend}** ในภาพใหญ่ (H4) "
-    summary += f"ประกอบกับค่าเงินดอลลาร์ (DXY) กำลัง **{dxy_status}** "
-    summary += f"และรายย่อยเทน้ำหนักไปฝั่ง **{'Short' if sentiment['short'] > 50 else 'Long'}** มากกว่า "
-    
-    if next_red_news:
-        summary += f"<br>⚠️ **News Alert:** ระวังความผันผวนจากข่าว **{next_red_news['title']}** ในอีก {next_red_news['hours']:.1f} ชั่วโมง"
-    else:
-        summary += "<br>✅ **News Alert:** ไม่มีข่าวกล่องแดงกวนใจในระยะนี้ สามารถเทรดรันเทรนด์ตามโครงสร้าง Technical ได้ตามปกติ"
-    
+    summary = f"**📊 Overall Market Bias:** ขณะนี้ทองคำอยู่ในโครงสร้างเทรนด์ **{trend}** (H4) "
+    summary += f"ดอลลาร์ (DXY) กำลัง **{dxy_status}** และรายย่อยเทน้ำหนักไปฝั่ง **{'Short' if sentiment['short'] > 50 else 'Long'}** "
+    if next_red_news: summary += f"<br>⚠️ **News Alert:** ระวังความผันผวนจากข่าว **{next_red_news['title']}** ในอีก {next_red_news['hours']:.1f} ชั่วโมง"
+    else: summary += "<br>✅ **News Alert:** ไม่มีข่าวกล่องแดงกวนใจ สามารถรันเทรนด์ Grid ได้ตามปกติ"
     return summary
 
 # --- 8. VISUALIZER ---
@@ -327,7 +350,6 @@ def plot_setup_chart(df, setup_dict, mode="Normal"):
     if entry:
         if len(entry) >= 2: fig.add_hrect(y0=min(entry), y1=max(entry), fillcolor=f"rgba({'255, 204, 0' if mode=='All-In' else '0, 204, 255'}, 0.2)", line_width=1, annotation_text="🎯 Entry", annotation_position="top right")
         else: fig.add_hline(y=entry[0], line_dash="dash", line_color=line_color, annotation_text="🎯 Entry", annotation_position="top right", annotation_font_color=line_color)
-    
     fig.update_layout(template='plotly_dark', margin=dict(l=10, r=50, t=10, b=10), height=350, xaxis_rangeslider_visible=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     return fig
 
@@ -357,10 +379,9 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v11.3")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v11.4")
 
-# 🟢 แก้ไขเป็น 6 คอลัมน์ ให้ SPDR กลับมา!
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
 with c2: st.metric("GC=F", f"${metrics['GC_F'][0]:,.2f}", f"{metrics['GC_F'][1]:.2f}%")
 with c3: st.metric("DXY", f"{metrics['DXY'][0]:,.2f}", f"{metrics['DXY'][1]:.2f}%", delta_color="inverse")
@@ -368,10 +389,8 @@ with c4: st.metric("US10Y", f"{metrics['US10Y'][0]:,.2f}%", f"{metrics['US10Y'][
 with c5: st.metric("SPDR Flow", get_spdr_flow())
 with c6: st.metric("Retail Senti.", f"S:{sentiment['short']}%", f"L:{sentiment['long']}%", delta_color="off")
 
-# 🟢 เพิ่ม Executive Summary ด้านล่างตัวเลข
 st.markdown(f"<div class='exec-summary'>{generate_exec_summary(df_h4, metrics, next_red_news, sentiment)}</div>", unsafe_allow_html=True)
 
-# 🌟 จัดหน้าจอแบ่งซ้าย-ขวา แบบ Command Center 🌟
 col_allin, col_normal = st.columns(2)
 
 with col_allin:
@@ -404,10 +423,9 @@ with col_allin:
     if setup_allin and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_allin, mode="All-In"), use_container_width=True)
     else: st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #ff3333; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังรอพายุสภาพคล่อง และการเกิด CHoCH...</div>", unsafe_allow_html=True)
 
-
 with col_normal:
     st.markdown("<h2 class='title-header' style='color: #00ccff;'>🃏 Normal Trade Mode</h2>", unsafe_allow_html=True)
-    sig_norm, reason_norm, setup_norm = calculate_normal_setup(df_m15, df_h4, final_news_list)
+    sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list)
     
     if "WAIT" not in sig_norm and setup_norm:
         curr_sig = f"NORM_{setup_norm.get('Entry','')}"
@@ -418,7 +436,7 @@ with col_normal:
     st.markdown(f"""
     <div class="plan-card">
         <h3 style="margin:0; color:#00ccff;">🃏 Daily Institutional Setup</h3>
-        <div style="color:{'#ffcc00' if 'WAIT' in sig_norm else '#00ff00'}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_norm}</div>
+        <div style="color:{'#ff00ff' if is_flash_crash else ('#ffcc00' if 'WAIT' in sig_norm else '#00ff00')}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_norm}</div>
         <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Logic:</b> {reason_norm}</div>
     """, unsafe_allow_html=True)
     if setup_norm:
@@ -431,7 +449,18 @@ with col_normal:
         </div>
         """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
-    
+
+    # 🟢 คืนชีพ EA Commander โดยประเมินจากตรรกะใน War Room ให้สอดคล้องกับ The Defender 🟢
+    st.markdown('<div class="ea-card">', unsafe_allow_html=True)
+    st.markdown('<h3 style="margin:0; color:#d4af37;">🤖 EA Commander Sync (The Defender)</h3>', unsafe_allow_html=True)
+    if is_flash_crash:
+        st.markdown("<div style='color:#ff3333; font-weight:bold; margin-top:10px;'>🚨 EMERGENCY: ปิดการทำงาน Grid ทันที! เข้าโหมด Anti-Dump / Hard Cut</div>", unsafe_allow_html=True)
+    elif "WAIT" in sig_norm or "PENDING" in sig_norm:
+        st.markdown("<div style='color:#ffcc00; font-weight:bold; margin-top:10px;'>⚠️ EA STANDBY: เข้าสู่โหมด Gold Down Pause หรือรอเข้าเทรดแบบ Limit</div>", unsafe_allow_html=True)
+    else:
+        st.markdown("<div style='color:#00ff00; font-weight:bold; margin-top:10px;'>▶️ EA RUNNING: กางระบบ Grid Buy/Sell ได้ตามปกติ</div>", unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
     if setup_norm and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_norm, mode="Normal"), use_container_width=True)
     else: st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #00ccff; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังสแกนหา Setup ปกติ...</div>", unsafe_allow_html=True)
 
@@ -459,10 +488,12 @@ def display_intelligence():
             
     with tab_pol:
         for news in pol_news: 
-            st.markdown(f"<div class='news-card'><a href='{news['link']}' target='_blank' style='color:#fff;'>🇺🇸 {news['title_th']}</a><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} </span></div>", unsafe_allow_html=True)
+            # 🟢 อัปเกรด News Panel ให้แสดงเวลาและ SMIS Score 🟢
+            st.markdown(f"<div class='news-card'><a href='{news['link']}' target='_blank' style='color:#fff;'>🇺🇸 {news['title_th']}</a><br><span style='font-size:11px; color:#888;'>🕒 {news['time']}</span><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | SMIS Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
     with tab_war:
         for news in war_news: 
-            st.markdown(f"<div class='news-card' style='border-color:#ff3333;'><a href='{news['link']}' target='_blank' style='color:#fff;'>⚠️ {news['title_th']}</a><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} </span></div>", unsafe_allow_html=True)
+            # 🟢 อัปเกรด News Panel ให้แสดงเวลาและ SMIS Score 🟢
+            st.markdown(f"<div class='news-card' style='border-color:#ff3333;'><a href='{news['link']}' target='_blank' style='color:#fff;'>⚠️ {news['title_th']}</a><br><span style='font-size:11px; color:#888;'>🕒 {news['time']}</span><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | SMIS Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
 
 tv_gold = f"""<div class="tradingview-widget-container"><div id="tv_gold"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});</script></div>"""
 tv_dxy = f"""<div class="tradingview-widget-container"><div id="tv_dxy"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "CAPITALCOM:DXY", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_dxy"}});</script></div>"""
