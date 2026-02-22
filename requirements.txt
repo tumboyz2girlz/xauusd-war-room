@@ -8,3 +8,4 @@ textblob
 deep-translator
 streamlit-autorefresh
 plotly
+kaleido
