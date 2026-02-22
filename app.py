@@ -16,7 +16,7 @@ import re
 import plotly.graph_objects as go
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.2", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.3", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -297,7 +297,7 @@ def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_
 
     return "WAIT", "รอ...", {}, light
 
-# --- 6. AUTO-LOGGER ---
+# --- 6. AUTO-LOGGER & TIMESTAMP HELPER 🟢 ---
 def extract_price(text, is_long=True, is_entry=False):
     prices = [float(x) for x in re.findall(r'\d+\.\d+', str(text).replace(',', ''))]
     if not prices: return 0.0
@@ -338,6 +338,23 @@ def log_new_trade(setup_type, sig, setup_data, reason_text):
         requests.post(GOOGLE_SHEET_API_URL, json=payload, timeout=3)
         st.session_state.pending_trades.append(internal_trade)
     except: pass
+
+# 🟢 ฟังก์ชันดึงเวลาที่พบ Setup ครั้งแรกมาโชว์บนหน้าจอ 🟢
+def get_setup_time_html(setup_type, current_sig, base_color):
+    hist = st.session_state.log_history.get(setup_type)
+    if hist and hist['signal'] == current_sig:
+        utc_dt = datetime.datetime.utcfromtimestamp(hist['time'])
+        thai_dt = utc_dt + datetime.timedelta(hours=7)
+        elapsed_mins = int((time.time() - hist['time']) / 60)
+        
+        # ถ้านานเกิน 45 นาที ให้ขึ้นเตือนตัวแดง!
+        is_stale = elapsed_mins >= 45
+        warn_color = "#ff4444" if is_stale else base_color
+        warn_icon = "⚠️" if is_stale else "🕒"
+        warn_text = f" ({elapsed_mins} นาทีที่แล้ว - ระวัง! Setup เก่าอาจจบไปแล้ว)" if is_stale else f" ({elapsed_mins} นาทีที่แล้ว)"
+        
+        return f"<div style='font-size:13px; color:{warn_color}; margin-top:8px; padding-top:8px; border-top:1px dashed #444;'>{warn_icon} <b>Signal Time:</b> {thai_dt.strftime('%d %b %Y | %H:%M น.')} {warn_text}</div>"
+    return ""
 
 def check_pending_trades(current_high, current_low):
     if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
@@ -445,7 +462,7 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v12.2")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v12.3")
 
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
@@ -462,7 +479,6 @@ else:
 
 st.markdown(f"<div class='exec-summary'>{generate_exec_summary(df_h4, metrics, next_red_news, sentiment)}</div>", unsafe_allow_html=True)
 
-# 🟢 โค้ดส่วน EA Commander พร้อมระบบไซเรน 🚨 🟢
 ea_status_html = ""
 siren_html = ""
 
@@ -492,7 +508,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 🟢 ฝังโค้ดเสียงไซเรน (แบบซ่อนไว้ ไม่ให้รบกวนหน้าเว็บ) 🟢
 if siren_html:
     st.components.v1.html(siren_html, width=0, height=0)
 
@@ -500,13 +515,18 @@ col_allin, col_normal = st.columns(2)
 
 with col_allin:
     st.markdown("<h2 class='title-header' style='color: #ffcc00;'>🎯 10-Strike All-In Protocol</h2>", unsafe_allow_html=True)
-    if "ALL-IN" in sig_allin: log_new_trade("All-In Setup", sig_allin, setup_allin, reason_allin)
+    
+    time_html_allin = ""
+    if "ALL-IN" in sig_allin: 
+        log_new_trade("All-In Setup", sig_allin, setup_allin, reason_allin)
+        time_html_allin = get_setup_time_html("All-In Setup", sig_allin, "#ffcc00") # 🟢 เรียกฟังก์ชันแสดงเวลา 🟢
             
     st.markdown(f"""
     <div class="allin-card">
         <h3 style="margin:0; color:#ffcc00;">{light} All-In Commander</h3>
         <div style="color:{'#888' if 'CLOSED' in sig_allin else ('#ffcc00' if 'WAIT' in sig_allin else '#00ff00')}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_allin}</div>
         <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Logic:</b> {reason_allin}</div>
+        {time_html_allin}
     """, unsafe_allow_html=True)
     if setup_allin:
         st.markdown(f"""
@@ -524,13 +544,18 @@ with col_allin:
 
 with col_normal:
     st.markdown("<h2 class='title-header' style='color: #00ccff;'>🃏 Normal Trade Mode</h2>", unsafe_allow_html=True)
-    if "WAIT" not in sig_norm and "CLOSED" not in sig_norm and setup_norm: log_new_trade("Normal Setup", sig_norm, setup_norm, reason_norm)
+    
+    time_html_norm = ""
+    if "WAIT" not in sig_norm and "CLOSED" not in sig_norm and setup_norm: 
+        log_new_trade("Normal Setup", sig_norm, setup_norm, reason_norm)
+        time_html_norm = get_setup_time_html("Normal Setup", sig_norm, "#00ccff") # 🟢 เรียกฟังก์ชันแสดงเวลา 🟢
             
     st.markdown(f"""
     <div class="plan-card">
         <h3 style="margin:0; color:#00ccff;">🃏 Daily Institutional Setup</h3>
         <div style="color:{'#888' if 'CLOSED' in sig_norm else ('#ff00ff' if is_flash_crash else ('#ffcc00' if 'WAIT' in sig_norm else '#00ff00'))}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_norm}</div>
         <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Logic:</b> {reason_norm}</div>
+        {time_html_norm}
     """, unsafe_allow_html=True)
     if setup_norm:
         st.markdown(f"""
