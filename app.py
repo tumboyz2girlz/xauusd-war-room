@@ -16,7 +16,7 @@ import re
 import plotly.graph_objects as go
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v11.6", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v11.7", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -26,7 +26,7 @@ if 'pending_trades' not in st.session_state: st.session_state.pending_trades = [
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
 
-# 🟢 แก้ไข CSS: ล็อคความสูงตายตัว (120px) ให้ 6 กล่องเท่ากันเป๊ะ 🟢
+# 🟢 CSS ล็อคความสูงตายตัว 120px 🟢
 st.markdown("""
 <style>
     div[data-testid="stMetric"] {
@@ -36,7 +36,7 @@ st.markdown("""
         border-radius: 8px; 
         box-shadow: 0 0 10px rgba(0,204,255,0.2);
         text-align: left; 
-        height: 120px !important; /* บังคับความสูงตายตัวแก้ปัญหากล่องเหลื่อมกัน */
+        height: 120px !important;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -179,8 +179,8 @@ def get_categorized_news():
         return news_list
     return fetch_rss("(Fed OR Powell OR Treasury)"), fetch_rss("(War OR Missile OR Israel OR Russia)")
 
-# --- 4. CORE AI (NORMAL MODE + FLASH CRASH SENSOR) ---
-def calculate_normal_setup(df_m15, df_h4, final_news_list):
+# --- 4. CORE AI (NORMAL MODE + 5 PILLARS INTEGRATED) ---
+def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics):
     if df_m15 is None or df_h4 is None: return "WAIT", "No Data", {}, False
     
     df_h4['ema50'] = ta.ema(df_h4['close'], length=50)
@@ -221,6 +221,11 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list):
             elif "DOWN" in ev['direction']: recent_news_dir = "DOWN"
             break
 
+    # 🟢 ตัวแปรสำหรับ 5 Pillars (DXY & Sentiment) 🟢
+    retail_short = sentiment.get('short', 50)
+    retail_long = sentiment.get('long', 50)
+    dxy_trend = metrics['DXY'][1]
+
     if is_flash_crash:
         setup = {'Entry': f"กด Sell ทันที หรือรอเด้งโซน ${current_m15['close'] + (0.5*atr):.2f}", 'SL': f"${current_m15['open'] + (0.5*atr):.2f}", 'TP': f"${current_m15['close'] - (3*atr):.2f}"}
         return "🚨 FLASH CRASH (SELL NOW!)", f"ตรวจพบการเทขายแดงเต็มแท่งดิ่งลง ${red_body_size:.2f} สั่งแทง SELL ตามน้ำ!", setup, True
@@ -231,8 +236,14 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list):
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema-(0.5*atr):.2f}", 'SL': f"${ema-(2*atr):.2f}", 'TP': f"${ema+(2*atr):.2f}"}
             return "PENDING LONG", f"RSI ทะลุ {rsi:.1f} (Overbought) ห้ามไล่ราคา! ให้ตั้ง Buy Limit รอย่อ", setup, False
         else:
-            reason = "โครงสร้าง 5 Pillars สนับสนุนขาขึ้น"
+            reason = "เทรนด์หลักขาขึ้น"
             reason += " + 🚀 MACD หนุน" if macd_hist > 0 else " + 🐌 MACD เริ่มอ่อนแรง"
+            # เอา Sentiment เข้ามาช่วยวิเคราะห์ใน Normal Mode
+            if retail_short > 60: reason += " + 🐑 รายย่อยฝืน Sell (Sentiment หนุนทองขึ้น)"
+            elif retail_long > 70: reason += " + ⚠️ ระวังรายย่อยแห่ Buy ตาม (เสี่ยงโดนเจ้ามือทุบ)"
+            # เอา DXY เข้ามาเช็ค
+            if dxy_trend < 0: reason += " + 💵 DXY อ่อนค่า (Macro เป็นใจ)"
+            
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema:.2f} (EMA)", 'SL': f"${ema-(2*atr):.2f}", 'TP': f"${ema+(2*atr):.2f}"}
             return "LONG", reason, setup, False
 
@@ -242,8 +253,12 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list):
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema+(0.5*atr):.2f}", 'SL': f"${ema+(2*atr):.2f}", 'TP': f"${ema-(2*atr):.2f}"}
             return "PENDING SHORT", f"RSI ตกไปที่ {rsi:.1f} (Oversold) ห้ามกด Sell ก้นเหว! ตั้ง Sell Limit รอเด้ง", setup, False
         else:
-            reason = "โครงสร้าง 5 Pillars สนับสนุนขาลง"
+            reason = "เทรนด์หลักขาลง"
             reason += " + 🚀 MACD หนุน" if macd_hist < 0 else " + 🐌 MACD เริ่มอ่อนแรง"
+            if retail_long > 60: reason += " + 🐑 รายย่อยฝืน Buy (Sentiment หนุนทองลง)"
+            elif retail_short > 70: reason += " + ⚠️ ระวังรายย่อยแห่ Sell ตาม (เสี่ยงโดนเจ้ามือลากกิน SL)"
+            if dxy_trend > 0: reason += " + 💵 DXY แข็งค่า (Macro เป็นใจ)"
+            
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema:.2f} (EMA)", 'SL': f"${ema+(2*atr):.2f}", 'TP': f"${ema-(2*atr):.2f}"}
             return "SHORT", reason, setup, False
             
@@ -359,8 +374,8 @@ pol_news, war_news = get_categorized_news()
 
 if df_m15 is not None: check_pending_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
-# คำนวณ Setup ล่วงหน้าเพื่อเอาข้อมูลไปให้ EA Commander
-sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list)
+# 🟢 ส่งข้อมูล Sentiment และ Metrics (DXY) เข้าไปวิเคราะห์ใน Normal Mode ด้วย! 🟢
+sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics)
 sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment)
 
 with st.sidebar:
@@ -380,7 +395,7 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v11.6")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v11.7")
 
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
@@ -392,14 +407,10 @@ with c6: st.metric("Retail Senti.", f"S:{sentiment['short']}%", f"L:{sentiment['
 
 st.markdown(f"<div class='exec-summary'>{generate_exec_summary(df_h4, metrics, next_red_news, sentiment)}</div>", unsafe_allow_html=True)
 
-# 🟢 แก้ไขปัญหากล่อง EA Commander กลวง (ยัด HTML เป็นก้อนเดียว) 🟢
 ea_status_html = ""
-if is_flash_crash:
-    ea_status_html = "<div style='color:#ff3333; font-size:18px; font-weight:bold; margin-top:10px;'>🚨 EMERGENCY: ปิดการทำงาน Grid ทันที! เข้าโหมด Anti-Dump / Hard Cut</div>"
-elif "WAIT" in sig_norm or "PENDING" in sig_norm:
-    ea_status_html = "<div style='color:#ffcc00; font-size:18px; font-weight:bold; margin-top:10px;'>⚠️ EA STANDBY: เข้าสู่โหมด Gold Down Pause หรือรอเข้าเทรดแบบ Limit</div>"
-else:
-    ea_status_html = "<div style='color:#00ff00; font-size:18px; font-weight:bold; margin-top:10px;'>▶️ EA RUNNING: กางระบบ Grid Buy/Sell ได้ตามปกติ</div>"
+if is_flash_crash: ea_status_html = "<div style='color:#ff3333; font-size:18px; font-weight:bold; margin-top:10px;'>🚨 EMERGENCY: ปิดการทำงาน Grid ทันที! เข้าโหมด Anti-Dump / Hard Cut</div>"
+elif "WAIT" in sig_norm or "PENDING" in sig_norm: ea_status_html = "<div style='color:#ffcc00; font-size:18px; font-weight:bold; margin-top:10px;'>⚠️ EA STANDBY: เข้าสู่โหมด Gold Down Pause หรือรอเข้าเทรดแบบ Limit</div>"
+else: ea_status_html = "<div style='color:#00ff00; font-size:18px; font-weight:bold; margin-top:10px;'>▶️ EA RUNNING: กางระบบ Grid Buy/Sell ได้ตามปกติ</div>"
 
 st.markdown(f"""
 <div class="ea-card">
@@ -408,7 +419,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 🌟 จัดหน้าจอแบ่งซ้าย-ขวา 🌟
 col_allin, col_normal = st.columns(2)
 
 with col_allin:
