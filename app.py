@@ -16,7 +16,7 @@ import re
 import plotly.graph_objects as go
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.1", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.2", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -86,25 +86,17 @@ def get_market_data():
     
     return metrics, df_m15, df_h4, mt5_news
 
-# 🟢 2.1 MARKET STATUS SENSOR (จับเวลาและวันหยุด) 🟢
 def check_market_status(df_m15):
     now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     weekday = now_thai.weekday()
-    
-    # ถ้าเป็นวันเสาร์ (5) หรือ อาทิตย์ (6) คือตลาดปิดแน่นอน
     if weekday == 5 or weekday == 6:
         return True, "🛑 ตลาดปิดทำการ (Weekend)"
-        
     if df_m15 is None or df_m15.empty:
         return True, "🛑 ไม่มีข้อมูลการเชื่อมต่อจาก MT5"
-        
-    # เช็คความเก่าของข้อมูล (Staleness)
     last_candle_time = pd.to_datetime(df_m15['time'].iloc[-1], unit='s') + datetime.timedelta(hours=7)
     hours_diff = (now_thai - last_candle_time).total_seconds() / 3600
-    
     if hours_diff > 2.0:
         return True, f"🛑 ตลาดเปิด แต่ MT5 ขาดการเชื่อมต่อ (ข้อมูลหยุดเดินมา {hours_diff:.1f} ชั่วโมง)"
-        
     return False, "🟢 เชื่อมต่อ MT5 สำเร็จ (Market Open)"
 
 # --- 3. FOREXFACTORY & SCRAPERS ---
@@ -183,7 +175,6 @@ def get_categorized_news():
 
 # --- 4. CORE AI ---
 def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed):
-    # 🟢 ถ้าตลาดปิด ตัดจบ ไม่ต้องคำนวณ 🟢
     if is_market_closed: 
         return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด หรือขาดข้อมูลล่าสุดจาก MT5", {}, False
         
@@ -244,7 +235,6 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
             if retail_short > 60: reason += " + 🐑 รายย่อยฝืน Sell"
             elif retail_long > 70: reason += " + ⚠️ ระวังรายย่อยแห่ Buy ตาม"
             if dxy_trend < 0: reason += " + 💵 DXY อ่อนค่า"
-            
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema:.2f} (EMA)", 'SL': f"${ema-(2*atr):.2f}", 'TP': f"${ema+(2*atr):.2f}"}
             return "LONG", reason, setup, False
 
@@ -259,7 +249,6 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
             if retail_long > 60: reason += " + 🐑 รายย่อยฝืน Buy"
             elif retail_short > 70: reason += " + ⚠️ ระวังรายย่อยแห่ Sell ตาม"
             if dxy_trend > 0: reason += " + 💵 DXY แข็งค่า"
-            
             setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp} if smc_found else {'Entry': f"${ema:.2f} (EMA)", 'SL': f"${ema+(2*atr):.2f}", 'TP': f"${ema-(2*atr):.2f}"}
             return "SHORT", reason, setup, False
             
@@ -276,9 +265,7 @@ def detect_choch_and_sweep(df):
     return False, "", 0, 0
 
 def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed):
-    # 🟢 ถ้าตลาดปิด ตัดจบ ไม่ต้องคำนวณ 🟢
     if is_market_closed: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, "🔴"
-    
     light = "🔴"
     if next_red_news:
         hrs = next_red_news['hours']
@@ -320,18 +307,15 @@ def extract_price(text, is_long=True, is_entry=False):
 
 def log_new_trade(setup_type, sig, setup_data, reason_text):
     if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
-    
     hist = st.session_state.log_history.get(setup_type)
     now = time.time()
     if hist and (now - hist['time'] < 3600) and hist['signal'] == sig: return
 
     st.session_state.log_history[setup_type] = {'time': now, 'signal': sig}
-    
     try:
         trade_id = f"TRD-{int(time.time())}"
         now_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S")
         clean_reason = re.sub('<[^<]+>', '', reason_text).strip()
-        
         is_long = "LONG" in sig or "BUY" in sig
         entry_val = extract_price(setup_data.get('Entry', ''), is_long, True)
         sl_val = extract_price(setup_data.get('SL', ''))
@@ -358,13 +342,11 @@ def log_new_trade(setup_type, sig, setup_data, reason_text):
 def check_pending_trades(current_high, current_low):
     if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
     trades_to_remove = []
-    
     for trade in st.session_state.pending_trades:
         entry_p = trade.get('entry_val', 0.0)
         sl_p = trade.get('sl_val', 0.0)
         tp_p = trade.get('tp_val', 0.0)
         if entry_p == 0.0 or sl_p == 0.0 or tp_p == 0.0: continue
-            
         is_long = "LONG" in trade['signal'] or "BUY" in trade['signal']
 
         if not trade.get('activated', False):
@@ -379,7 +361,6 @@ def check_pending_trades(current_high, current_low):
             else:
                 if current_high >= sl_p: result = "LOSS ❌"
                 elif current_low <= tp_p: result = "WIN 🎯"
-                
             if result:
                 try:
                     requests.post(GOOGLE_SHEET_API_URL, json={"action": "update", "id": trade['id'], "result": result}, timeout=3)
@@ -387,8 +368,7 @@ def check_pending_trades(current_high, current_low):
                 except: pass
                 
     for t in trades_to_remove:
-        if t in st.session_state.pending_trades:
-            st.session_state.pending_trades.remove(t)
+        if t in st.session_state.pending_trades: st.session_state.pending_trades.remove(t)
 
 # --- 7. EXECUTIVE SUMMARY ---
 def generate_exec_summary(df_h4, metrics, next_red_news, sentiment):
@@ -431,7 +411,7 @@ def plot_setup_chart(df, setup_dict, mode="Normal"):
 
 # --- UI MAIN ---
 metrics, df_m15, df_h4, mt5_news = get_market_data()
-is_market_closed, status_msg = check_market_status(df_m15) # 🟢 ตัวแปรเช็คตลาดปิด
+is_market_closed, status_msg = check_market_status(df_m15)
 
 ff_raw_news = get_forexfactory_usd()
 final_news_list, next_red_news = merge_news_sources(mt5_news, ff_raw_news)
@@ -441,7 +421,6 @@ pol_news, war_news = get_categorized_news()
 if not is_market_closed and df_m15 is not None: 
     check_pending_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
-# 🟢 ส่ง is_market_closed เข้าไปตัดบทการคำนวณ 🟢
 sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed)
 sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed)
 
@@ -449,7 +428,11 @@ with st.sidebar:
     st.header("💻 War Room Terminal")
     layout_mode = st.radio("Display:", ["🖥️ Desktop", "📱 Mobile"])
     if st.button("Refresh Data", type="primary"): st.cache_data.clear()
+    
     st.markdown("---")
+    st.markdown(f"**Status:** {status_msg}")
+    st.markdown("---")
+    
     st.subheader("✍️ Override ข่าวเศรษฐกิจ")
     has_pending = False
     for i, ev in enumerate(final_news_list):
@@ -462,7 +445,7 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v12.1")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v12.2")
 
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
@@ -472,7 +455,6 @@ with c4: st.metric("US10Y", f"{metrics['US10Y'][0]:,.2f}", f"{metrics['US10Y'][1
 with c5: st.metric("SPDR Flow", get_spdr_flow())
 with c6: st.metric("Retail Senti.", f"S:{sentiment['short']}%", f"L:{sentiment['long']}%", delta_color="off")
 
-# 🟢 ป้ายเตือนสถานะตลาด (ตัวหนังสือเล็ก) วางไว้เหนือ Executive Summary 🟢
 if is_market_closed:
     st.markdown(f"<div style='text-align: center; color: #ff4444; font-size: 14px; margin-top: -5px; margin-bottom: 15px;'>{status_msg}</div>", unsafe_allow_html=True)
 else:
@@ -480,11 +462,28 @@ else:
 
 st.markdown(f"<div class='exec-summary'>{generate_exec_summary(df_h4, metrics, next_red_news, sentiment)}</div>", unsafe_allow_html=True)
 
+# 🟢 โค้ดส่วน EA Commander พร้อมระบบไซเรน 🚨 🟢
 ea_status_html = ""
-if "CLOSED" in sig_norm: ea_status_html = "<div style='color:#888; font-size:18px; font-weight:bold; margin-top:10px;'>🛑 EA OFFLINE: ตลาดปิด หรือ ขาดการเชื่อมต่อจาก MT5</div>"
-elif is_flash_crash: ea_status_html = "<div style='color:#ff3333; font-size:18px; font-weight:bold; margin-top:10px;'>🚨 EMERGENCY: ปิดการทำงาน Grid ทันที! เข้าโหมด Anti-Dump / Hard Cut</div>"
-elif "WAIT" in sig_norm or "PENDING" in sig_norm: ea_status_html = "<div style='color:#ffcc00; font-size:18px; font-weight:bold; margin-top:10px;'>⚠️ EA STANDBY: เข้าสู่โหมด Gold Down Pause หรือรอเข้าเทรดแบบ Limit</div>"
-else: ea_status_html = "<div style='color:#00ff00; font-size:18px; font-weight:bold; margin-top:10px;'>▶️ EA RUNNING: กางระบบ Grid Buy/Sell ได้ตามปกติ</div>"
+siren_html = ""
+
+if "CLOSED" in sig_norm: 
+    ea_status_html = "<div style='color:#888; font-size:18px; font-weight:bold; margin-top:10px;'>🛑 EA OFFLINE: ตลาดปิด หรือ ขาดการเชื่อมต่อจาก MT5</div>"
+elif is_flash_crash: 
+    ea_status_html = "<div style='color:#ff3333; font-size:18px; font-weight:bold; margin-top:10px;'>🚨 EMERGENCY: ปิดการทำงาน Grid ทันที! เข้าโหมด Anti-Dump / Hard Cut</div>"
+    siren_html = """
+    <audio id="siren_audio" autoplay loop>
+        <source src="https://actions.google.com/sounds/v1/alarms/air_raid_siren.ogg" type="audio/ogg">
+    </audio>
+    <script>
+        var siren = document.getElementById("siren_audio");
+        siren.volume = 1.0;
+        setTimeout(function(){ siren.pause(); }, 15000);
+    </script>
+    """
+elif "WAIT" in sig_norm or "PENDING" in sig_norm: 
+    ea_status_html = "<div style='color:#ffcc00; font-size:18px; font-weight:bold; margin-top:10px;'>⚠️ EA STANDBY: เข้าสู่โหมด Gold Down Pause หรือรอเข้าเทรดแบบ Limit</div>"
+else: 
+    ea_status_html = "<div style='color:#00ff00; font-size:18px; font-weight:bold; margin-top:10px;'>▶️ EA RUNNING: กางระบบ Grid Buy/Sell ได้ตามปกติ</div>"
 
 st.markdown(f"""
 <div class="ea-card">
@@ -493,12 +492,15 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# 🟢 ฝังโค้ดเสียงไซเรน (แบบซ่อนไว้ ไม่ให้รบกวนหน้าเว็บ) 🟢
+if siren_html:
+    st.components.v1.html(siren_html, width=0, height=0)
+
 col_allin, col_normal = st.columns(2)
 
 with col_allin:
     st.markdown("<h2 class='title-header' style='color: #ffcc00;'>🎯 10-Strike All-In Protocol</h2>", unsafe_allow_html=True)
-    if "ALL-IN" in sig_allin:
-        log_new_trade("All-In Setup", sig_allin, setup_allin, reason_allin)
+    if "ALL-IN" in sig_allin: log_new_trade("All-In Setup", sig_allin, setup_allin, reason_allin)
             
     st.markdown(f"""
     <div class="allin-card">
@@ -522,8 +524,7 @@ with col_allin:
 
 with col_normal:
     st.markdown("<h2 class='title-header' style='color: #00ccff;'>🃏 Normal Trade Mode</h2>", unsafe_allow_html=True)
-    if "WAIT" not in sig_norm and "CLOSED" not in sig_norm and setup_norm:
-        log_new_trade("Normal Setup", sig_norm, setup_norm, reason_norm)
+    if "WAIT" not in sig_norm and "CLOSED" not in sig_norm and setup_norm: log_new_trade("Normal Setup", sig_norm, setup_norm, reason_norm)
             
     st.markdown(f"""
     <div class="plan-card">
