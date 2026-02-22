@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.8", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.9", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -29,9 +29,9 @@ if 'last_us_open_summary_date' not in st.session_state: st.session_state.last_us
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
 
-# 🟢 TELEGRAM API CONFIGURATION (พี่ตั้มไม่ต้องแก้แล้ว ผมใส่ให้เป๊ะๆ แล้วครับ) 🟢
+# 🟢 TELEGRAM API CONFIGURATION 🟢
 TELEGRAM_BOT_TOKEN = "8239625215:AAF7qUsz2O5mhINRhRYPTICljJsCErDDLD8"
-TELEGRAM_CHAT_ID = "5638824802" 
+TELEGRAM_CHAT_ID = "5638824802"
 
 st.markdown("""
 <style>
@@ -49,7 +49,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 🟢 ฟังก์ชันส่ง Telegram Notify แบบรองรับรูปภาพกราฟ 🟢
 def send_telegram_notify(msg, image_path=None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     
@@ -95,7 +94,13 @@ def get_market_data():
                 for ev in data['NEWS']:
                     event_dt = datetime.datetime.fromtimestamp(ev['time_sec']) 
                     time_diff_hours = (event_dt - now_thai).total_seconds() / 3600
-                    mt5_news.append({'source': 'MT5', 'title': ev['title'], 'time': event_dt.strftime("%H:%M"), 'impact': ev['impact'], 'actual': st.session_state.manual_overrides.get(ev['title'], ev['actual']), 'forecast': ev['forecast'], 'direction': ev.get('direction', ''), 'dt': event_dt, 'time_diff_hours': time_diff_hours})
+                    mt5_news.append({
+                        'source': 'MT5', 'title': ev['title'], 
+                        'time': event_dt.strftime("%H:%M"), 'impact': ev['impact'], 
+                        'actual': st.session_state.manual_overrides.get(ev['title'], ev['actual']), 
+                        'forecast': ev['forecast'], 'direction': ev.get('direction', ''), 
+                        'dt': event_dt, 'time_diff_hours': time_diff_hours
+                    })
     except: pass
 
     try:
@@ -145,7 +150,12 @@ def get_forexfactory_usd():
                 thai_dt = gmt_dt + datetime.timedelta(hours=7)
                 time_diff_hours = (thai_dt - now_thai).total_seconds() / 3600
                 if time_diff_hours < -12.0 or (impact == 'High' and time_diff_hours > 24): continue
-                ff_news.append({'source': 'FF', 'title': title, 'time': thai_dt.strftime("%H:%M"), 'impact': impact, 'actual': st.session_state.manual_overrides.get(title, event.find('actual').text if event.find('actual') is not None else "Pending"), 'forecast': event.find('forecast').text if event.find('forecast') is not None else "", 'direction': '', 'dt': thai_dt, 'time_diff_hours': time_diff_hours})
+                ff_news.append({
+                    'source': 'FF', 'title': title, 'time': thai_dt.strftime("%H:%M"), 
+                    'impact': impact, 'actual': st.session_state.manual_overrides.get(title, event.find('actual').text if event.find('actual') is not None else "Pending"), 
+                    'forecast': event.find('forecast').text if event.find('forecast') is not None else "", 
+                    'direction': '', 'dt': thai_dt, 'time_diff_hours': time_diff_hours
+                })
         return ff_news
     except: return []
 
@@ -179,10 +189,12 @@ def get_categorized_news():
                 date_str = datetime.datetime.fromtimestamp(pub_time).strftime('%d %b | %H:%M น.')
                 title_lower = entry.title.lower()
                 polarity = TextBlob(entry.title).sentiment.polarity
+                
                 base_score = abs(polarity) * 5
                 if any(kw in title_lower for kw in ['war', 'missile', 'strike', 'emergency', 'attack']): base_score += 4.0
                 elif any(kw in title_lower for kw in ['fed', 'inflation', 'rate']): base_score += 2.0
                 final_score = min(10.0, max(1.0, base_score))
+                
                 direction = "⚪ NEUTRAL"
                 if any(w in title_lower for w in ['war', 'missile', 'strike', 'attack', 'escalat']): direction = "🟢 GOLD UP (Safe Haven)"
                 elif any(w in title_lower for w in ['ceasefire', 'peace']): direction = "🔴 GOLD DOWN (Risk-On)"
@@ -191,7 +203,11 @@ def get_categorized_news():
                 else:
                     if polarity <= -0.2: direction = "🟢 GOLD UP (Negative/Panic)"
                     elif polarity >= 0.2: direction = "🔴 GOLD DOWN (Positive/Calm)"
-                news_list.append({'title_en': entry.title, 'title_th': translator.translate(entry.title), 'link': entry.link, 'time': date_str, 'score': final_score, 'direction': direction})
+                
+                news_list.append({
+                    'title_en': entry.title, 'title_th': translator.translate(entry.title), 
+                    'link': entry.link, 'time': date_str, 'score': final_score, 'direction': direction
+                })
         except: pass
         return news_list
     return fetch_rss("(Fed OR Powell OR Treasury)"), fetch_rss("(War OR Missile OR Israel OR Russia)")
@@ -212,15 +228,22 @@ def get_breaking_news():
                 date_str = datetime.datetime.fromtimestamp(pub_time).strftime('%d %b | %H:%M น.')
                 title_lower = entry.title.lower()
                 polarity = TextBlob(entry.title).sentiment.polarity
+                
                 direction = "⚪ NEUTRAL"
                 if any(w in title_lower for w in ['gold', 'xau']):
                     direction = "🟢 GOLD UP" if polarity > 0 else "🔴 GOLD DOWN"
                 elif any(w in title_lower for w in ['usd', 'dollar', 'fed']):
                     direction = "🔴 GOLD DOWN (Strong USD)" if polarity > 0 else "🟢 GOLD UP (Weak USD)"
+                
                 base_score = abs(polarity) * 5
                 if any(w in title_lower for w in ['urgent', 'breaking', 'alert', 'jump', 'drop', 'crash']): base_score += 5.0
                 final_score = min(10.0, max(1.0, base_score))
-                speed_news.append({'title_en': entry.title, 'title_th': translator.translate(entry.title), 'link': entry.link, 'time': date_str, 'score': final_score, 'direction': direction, 'source': source['source'], 'timestamp': pub_time})
+                
+                speed_news.append({
+                    'title_en': entry.title, 'title_th': translator.translate(entry.title), 
+                    'link': entry.link, 'time': date_str, 'score': final_score, 
+                    'direction': direction, 'source': source['source'], 'timestamp': pub_time
+                })
         except: pass
     speed_news.sort(key=lambda x: x['timestamp'], reverse=True)
     return speed_news[:10]
@@ -402,7 +425,6 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
             try: fig.write_image(img_path)
             except: img_path = None
 
-        # 🟢 รูปแบบข้อความของ Telegram 🟢
         tg_msg = f"🎯 [NEW SETUP] {thai_dt_str}\n\n"
         tg_msg += f"Mode: {setup_type}\n"
         tg_msg += f"Signal: {sig}\n"
@@ -440,7 +462,6 @@ def check_pending_trades(current_high, current_low):
                 try: requests.post(GOOGLE_SHEET_API_URL, json={"action": "update", "id": trade['id'], "result": result}, timeout=3)
                 except: pass
                 
-                # 🟢 ส่งผลลัพธ์เข้า Telegram 🟢
                 tg_msg = f"🏁 [RESULT] {trade.get('display_time', '')}\n\n"
                 tg_msg += f"Signal: {trade.get('signal', '')}\n"
                 tg_msg += f"Entry: {trade.get('display_entry', '')}\n"
@@ -484,7 +505,6 @@ def generate_telegram_us_briefing(df_h4, metrics, sentiment, final_news_list, wa
     geo_str = "- สงบสุข ไม่มีข่าวฉุกเฉิน ⚪"
     if war_news: geo_str = f"- {war_news[0]['title_th']} (Impact: {war_news[0]['score']:.1f}/10) {war_news[0]['direction']}"
 
-    # 🟢 รูปแบบข้อความสำหรับ Telegram 🟢
     msg = f"🗽🇺🇸 US Session Briefing 🇺🇸🗽\n"
     msg += f"ประจำวันที่: {now_thai.strftime('%d %b %Y | 19:30 น.')}\n\n"
     msg += f"📊 [Technical]\n"
@@ -569,11 +589,9 @@ with st.sidebar:
     st.header("💻 War Room Terminal")
     layout_mode = st.radio("Display:", ["🖥️ Desktop", "📱 Mobile"])
     if st.button("Refresh Data", type="primary"): st.cache_data.clear()
-    
     st.markdown("---")
     st.markdown(f"**Status:** {status_msg}")
     st.markdown("---")
-    
     st.subheader("✍️ Override ข่าวเศรษฐกิจ")
     has_pending = False
     for i, ev in enumerate(final_news_list):
@@ -586,7 +604,7 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v12.8")
+st.title("🦅 XAUUSD WAR ROOM: Institutional Master Node v12.9")
 
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
@@ -688,10 +706,35 @@ with col_normal:
 
 st.write("---")
 
+# --- HTML สำหรับ TradingView ---
+tv_gold_html = """
+<div class="tradingview-widget-container">
+  <div id="tv_gold"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
+  new TradingView.widget({
+    "width": "100%", "height": %d, "symbol": "OANDA:XAUUSD", "interval": "15",
+    "theme": "dark", "style": "1", "container_id": "tv_gold"
+  });
+  </script>
+</div>
+"""
+tv_dxy_html = """
+<div class="tradingview-widget-container">
+  <div id="tv_dxy"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
+  new TradingView.widget({
+    "width": "100%", "height": %d, "symbol": "CAPITALCOM:DXY", "interval": "15",
+    "theme": "dark", "style": "1", "container_id": "tv_dxy"
+  });
+  </script>
+</div>
+"""
+
 def display_intelligence():
     st.subheader("📰 Global Intelligence Hub")
     tab_eco, tab_pol, tab_war, tab_speed = st.tabs(["📅 ข่าวเศรษฐกิจ (Merged Data)", "🏛️ การเมือง & Fed", "⚔️ สงคราม", "⚡ ข่าวด่วน (Breaking News)"])
-    
     with tab_eco:
         if final_news_list:
             for ev in final_news_list:
@@ -707,7 +750,6 @@ def display_intelligence():
                 </div>
                 """, unsafe_allow_html=True)
         else: st.write("ไม่มีข่าวเศรษฐกิจสำคัญในช่วงนี้")
-            
     with tab_pol:
         for news in pol_news: 
             st.markdown(f"<div class='news-card'><a href='{news['link']}' target='_blank' style='color:#fff;'>🇺🇸 {news['title_th']}</a><br><span style='font-size:11px; color:#888;'>🕒 {news['time']}</span><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | SMIS Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
@@ -718,21 +760,19 @@ def display_intelligence():
         if speed_news:
             for news in speed_news:
                 st.markdown(f"<div class='news-card' style='border-color:#00ccff;'><a href='{news['link']}' target='_blank' style='color:#fff;'>🔥 [{news['source']}] {news['title_th']}</a><br><span style='font-size:11px; color:#888;'>🕒 {news['time']}</span><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | SMIS Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
-        else:
-            st.write("กำลังสแกนหาข่าวด่วน...")
-
-tv_gold = f"""<div class="tradingview-widget-container"><div id="tv_gold"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "OANDA:XAUUSD", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_gold"}});</script></div>"""
-tv_dxy = f"""<div class="tradingview-widget-container"><div id="tv_dxy"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {600 if layout_mode == "🖥️ Desktop" else 400}, "symbol": "CAPITALCOM:DXY", "interval": "15", "theme": "dark", "style": "1", "container_id": "tv_dxy"}});</script></div>"""
+        else: st.write("กำลังสแกนหาข่าวด่วน...")
 
 if layout_mode == "🖥️ Desktop":
     col_chart_bot, col_news_bot = st.columns([1.8, 1])
     with col_chart_bot:
         tab_chart_gold, tab_chart_dxy = st.tabs(["🥇 XAUUSD", "💵 DXY"])
-        with tab_chart_gold: st.components.v1.html(tv_gold, height=600)
-        with tab_chart_dxy: st.components.v1.html(tv_dxy, height=600)
+        with tab_chart_gold: st.components.v1.html(tv_gold_html % 600, height=600)
+        with tab_chart_dxy: st.components.v1.html(tv_dxy_html % 600, height=600)
     with col_news_bot: display_intelligence()
 else:
     tab_chart_gold, tab_chart_dxy = st.tabs(["🥇 XAUUSD", "💵 DXY"])
-    with tab_chart_gold: st.components.v1.html(tv_gold, height=400)
-    with tab_chart_dxy: st.components.v1.html(tv_dxy, height=400)
+    with tab_chart_gold: st.components.v1.html(tv_gold_html % 400, height=400)
+    with tab_chart_dxy: st.components.v1.html(tv_dxy_html % 400, height=400)
     display_intelligence()
+
+# --- END OF CODE ---
