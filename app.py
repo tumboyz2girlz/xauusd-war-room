@@ -260,8 +260,20 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
     macd = ta.macd(df_m15['close'], fast=12, slow=26, signal=9)
     df_m15 = pd.concat([df_m15, macd], axis=1)
 
-    trend_h4 = "UP" if df_h4.iloc[-2]['close'] > df_h4.iloc[-2]['ema50'] else "DOWN"
-    trend_m15 = "UP" if df_m15.iloc[-2]['close'] > df_m15.iloc[-2]['ema50'] else "DOWN"
+# อัปเกรด Logic การหาเทรนด์: เช็คความชัน (Slope) ย้อนหลัง 3 แท่ง เพื่อป้องกันราคาสะบัดหลอก (Liquidity Sweep)
+if df_h4.iloc[-2]['ema50'] > df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] > df_h4.iloc[-4]['ema50']:
+    trend_h4 = "UP"
+elif df_h4.iloc[-2]['ema50'] < df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] < df_h4.iloc[-4]['ema50']:
+    trend_h4 = "DOWN"
+else:
+    trend_h4 = "SIDEWAY"
+
+if df_m15.iloc[-2]['ema50'] > df_m15.iloc[-3]['ema50'] and df_m15.iloc[-3]['ema50'] > df_m15.iloc[-4]['ema50']:
+    trend_m15 = "UP"
+elif df_m15.iloc[-2]['ema50'] < df_m15.iloc[-3]['ema50'] and df_m15.iloc[-3]['ema50'] < df_m15.iloc[-4]['ema50']:
+    trend_m15 = "DOWN"
+else:
+    trend_m15 = "SIDEWAY"
     atr = float(df_m15.iloc[-2]['atr'])
     ema = float(df_m15.iloc[-2]['ema50'])
     rsi = float(df_m15.iloc[-1]['rsi'])
