@@ -834,3 +834,44 @@ else:
     with tab_chart_gold: st.components.v1.html(get_tv_html("OANDA:XAUUSD", 400), height=400)
     with tab_chart_dxy: st.components.v1.html(get_tv_html("CAPITALCOM:DXY", 400), height=400)
     display_intelligence()
+# --- 9. TELEGRAM INTERACTIVE LISTENER (MENTION HANDLER) ---
+def handle_telegram_mentions(metrics, df_h4, df_m15, sentiment, final_news_list, war_news, setup_norm):
+    """ฟังก์ชันคอยเช็คว่ามีคน Mention หาบอทในกลุ่มไหม (เพิ่ม Parameter เข้าไป)"""
+    last_update_id = st.session_state.get('last_tg_update_id', 0)
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    
+    try:
+        params = {"offset": last_update_id + 1, "timeout": 1}
+        res = requests.get(url, params=params, timeout=5).json()
+        
+        if res.get("ok") and res.get("result"):
+            for update in res["result"]:
+                st.session_state.last_tg_update_id = update["update_id"]
+                
+                if "message" in update and "text" in update["message"]:
+                    msg_text = update["message"]["text"]
+                    
+                    # ตรวจสอบ Mention หรือ คำสั่ง /
+                    if "@" in msg_text or msg_text.startswith("/"):
+                        
+                        if "/status" in msg_text or "ราคา" in msg_text:
+                            status_msg = f"🦅 กวักทองรายงานตัวครับ!\n\n🥇 Gold: ${metrics['GOLD'][0]:,.2f} ({metrics['GOLD'][1]:.2f}%)\n💵 DXY: {metrics['DXY'][0]:,.2f}\n🐑 Sentiment: S:{sentiment['short']}% | L:{sentiment['long']}%"
+                            send_telegram_notify(status_msg)
+                            
+                        elif "/brief" in msg_text or "สรุป" in msg_text:
+                            brief_msg = generate_telegram_us_briefing(df_h4, metrics, sentiment, final_news_list, war_news)
+                            send_telegram_notify(brief_msg)
+                            
+                        elif "/chart" in msg_text or "กราฟ" in msg_text:
+                            img_path = "manual_chart.png"
+                            fig = plot_setup_chart(df_m15, setup_norm)
+                            if fig:
+                                fig.write_image(img_path)
+                                send_telegram_notify("📊 นี่คือกราฟ XAUUSD ล่าสุดพร้อมโซน SMC ครับ", img_path)
+
+    except Exception as e:
+        pass
+
+# 💡 แก้ไขจุดเรียกใช้งานตอนท้ายสุด (ส่งตัวแปรเข้าไปในฟังก์ชัน)
+if not is_market_closed and df_m15 is not None:
+    handle_telegram_mentions(metrics, df_h4, df_m15, sentiment, final_news_list, war_news, setup_norm)
