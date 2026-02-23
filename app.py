@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.10", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.11", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -43,6 +43,7 @@ st.markdown("""
     .exec-summary {background-color: #131722; padding: 15px; border-radius: 8px; border-left: 5px solid #d4af37; margin-bottom: 15px;}
     .ff-card {background-color: #222831; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #555;}
     .news-card {background-color: #131722; padding: 12px; border-radius: 8px; border-left: 4px solid #f0b90b; margin-bottom: 12px;}
+    .session-card {background-color: #1a1a2e; padding: 10px; border-radius: 8px; border: 1px solid #ff00ff; text-align: center; margin-bottom: 15px; font-weight: bold; color: #ff00ff;}
     h2.title-header {text-align: center; margin-bottom: 20px; font-weight: bold;}
     .stTabs [data-baseweb="tab"] {background-color: #1a1a2e; border-radius: 5px 5px 0 0;}
     .stTabs [aria-selected="true"] {background-color: #d4af37 !important; color: #000 !important; font-weight: bold;}
@@ -126,6 +127,17 @@ def check_market_status(df_m15):
     if hours_diff > 2.0:
         return True, f"🛑 ตลาดเปิด แต่ MT5 ขาดการเชื่อมต่อ (ข้อมูลหยุดเดินมา {hours_diff:.1f} ชั่วโมง)"
     return False, "🟢 เชื่อมต่อ MT5 สำเร็จ (Market Open)"
+
+def get_current_session():
+    now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+    h = now_thai.hour
+    sessions = []
+    if 5 <= h < 14: sessions.append("🌏 Asia Session")
+    if 14 <= h < 23: sessions.append("💶 Europe/London Session")
+    if h >= 19 or h < 4: sessions.append("🗽 US/New York Session")
+    
+    if not sessions: return "🌙 Market Transition / Low Liquidity"
+    return " | ".join(sessions)
 
 # --- 3. FOREXFACTORY & SCRAPERS ---
 @st.cache_data(ttl=900)
@@ -260,20 +272,21 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
     macd = ta.macd(df_m15['close'], fast=12, slow=26, signal=9)
     df_m15 = pd.concat([df_m15, macd], axis=1)
 
-# อัปเกรด Logic การหาเทรนด์: เช็คความชัน (Slope) ย้อนหลัง 3 แท่ง เพื่อป้องกันราคาสะบัดหลอก (Liquidity Sweep)
-if df_h4.iloc[-2]['ema50'] > df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] > df_h4.iloc[-4]['ema50']:
-    trend_h4 = "UP"
-elif df_h4.iloc[-2]['ema50'] < df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] < df_h4.iloc[-4]['ema50']:
-    trend_h4 = "DOWN"
-else:
-    trend_h4 = "SIDEWAY"
+    # 💡 อัปเกรด Logic หาเทรนด์: เช็คความชัน (Slope) 3 แท่งล่าสุด ป้องกัน Liquidity Sweep
+    if df_h4.iloc[-2]['ema50'] > df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] > df_h4.iloc[-4]['ema50']:
+        trend_h4 = "UP"
+    elif df_h4.iloc[-2]['ema50'] < df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] < df_h4.iloc[-4]['ema50']:
+        trend_h4 = "DOWN"
+    else:
+        trend_h4 = "SIDEWAY"
 
-if df_m15.iloc[-2]['ema50'] > df_m15.iloc[-3]['ema50'] and df_m15.iloc[-3]['ema50'] > df_m15.iloc[-4]['ema50']:
-    trend_m15 = "UP"
-elif df_m15.iloc[-2]['ema50'] < df_m15.iloc[-3]['ema50'] and df_m15.iloc[-3]['ema50'] < df_m15.iloc[-4]['ema50']:
-    trend_m15 = "DOWN"
-else:
-    trend_m15 = "SIDEWAY"
+    if df_m15.iloc[-2]['ema50'] > df_m15.iloc[-3]['ema50'] and df_m15.iloc[-3]['ema50'] > df_m15.iloc[-4]['ema50']:
+        trend_m15 = "UP"
+    elif df_m15.iloc[-2]['ema50'] < df_m15.iloc[-3]['ema50'] and df_m15.iloc[-3]['ema50'] < df_m15.iloc[-4]['ema50']:
+        trend_m15 = "DOWN"
+    else:
+        trend_m15 = "SIDEWAY"
+
     atr = float(df_m15.iloc[-2]['atr'])
     ema = float(df_m15.iloc[-2]['ema50'])
     rsi = float(df_m15.iloc[-1]['rsi'])
@@ -490,10 +503,15 @@ def check_pending_trades(current_high, current_low):
 # --- 7. EXECUTIVE SUMMARY ---
 def generate_exec_summary(df_h4, metrics, next_red_news, sentiment):
     if df_h4 is None: return "ข้อมูล Market ปิดทำการ ไม่สามารถประมวลผลเทรนด์ได้ในขณะนี้"
-    trend = "ขาขึ้น 🟢" if df_h4.iloc[-2]['close'] > ta.ema(df_h4['close'], length=50).iloc[-2] else "ขาลง 🔴"
+    
+    # อัปเกรด Logic หาเทรนด์ H4
+    if df_h4.iloc[-2]['ema50'] > df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] > df_h4.iloc[-4]['ema50']: trend = "ขาขึ้น 🟢"
+    elif df_h4.iloc[-2]['ema50'] < df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] < df_h4.iloc[-4]['ema50']: trend = "ขาลง 🔴"
+    else: trend = "ไซด์เวย์ ⚪"
+    
     dxy_status = "อ่อนค่า (หนุนทอง)" if metrics['DXY'][1] < 0 else "แข็งค่า (กดดันทอง)"
     summary = f"**📊 Overall Market Bias:** ขณะนี้ทองคำอยู่ในโครงสร้างเทรนด์ **{trend}** (H4) "
-    summary += f"ดอลลาร์ (DXY) กำลัง **{dxy_status}** และรายย่อยเทน้ำหนักไปฝั่ง **{'Short' if sentiment['short'] > 50 else 'Long'}** "
+    summary += f"ดอลลาร์ (DXY) กำลัง **{dxy_status}** และรายย่อยเทน้ำหนักไปฝั่ง **{'Short' if sentiment.get('short',50) > 50 else 'Long'}** "
     if next_red_news: summary += f"<br>⚠️ **News Alert:** ระวังความผันผวนจากข่าว **{next_red_news['title']}** ในอีก {next_red_news['hours']:.1f} ชั่วโมง"
     else: summary += "<br>✅ **News Alert:** ไม่มีข่าวกล่องแดงกวนใจ สามารถรันเทรนด์ Grid ได้ตามปกติ"
     return summary
@@ -501,12 +519,15 @@ def generate_exec_summary(df_h4, metrics, next_red_news, sentiment):
 def generate_telegram_us_briefing(df_h4, metrics, sentiment, final_news_list, war_news):
     now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     trend = "ไม่สามารถวิเคราะห์ได้ (ไม่มีข้อมูล)"
-    if df_h4 is not None: trend = "ขาขึ้น 🟢" if df_h4.iloc[-2]['close'] > ta.ema(df_h4['close'], length=50).iloc[-2] else "ขาลง 🔴"
+    if df_h4 is not None: 
+        if df_h4.iloc[-2]['ema50'] > df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] > df_h4.iloc[-4]['ema50']: trend = "ขาขึ้น 🟢"
+        elif df_h4.iloc[-2]['ema50'] < df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] < df_h4.iloc[-4]['ema50']: trend = "ขาลง 🔴"
+        else: trend = "ไซด์เวย์ ⚪"
     
     dxy_status = "อ่อนค่า 🟢" if metrics['DXY'][1] < 0 else "แข็งค่า 🔴"
     us10y_status = "ปรับตัวลง 🟢" if metrics['US10Y'][1] < 0 else "พุ่งขึ้น 🔴"
     gcf_status = "ซื้อเก็บ 🟢" if metrics['GC_F'][1] > 0 else "เทขาย 🔴"
-    senti_status = "หนุนทองขึ้น 🟢" if sentiment['short'] > 50 else "กดดันทองลง 🔴"
+    senti_status = "หนุนทองขึ้น 🟢" if sentiment.get('short',50) > 50 else "กดดันทองลง 🔴"
     
     today_news_str = ""
     for ev in final_news_list:
@@ -527,10 +548,10 @@ def generate_telegram_us_briefing(df_h4, metrics, sentiment, final_news_list, wa
     msg += f"US10Y: {metrics['US10Y'][0]:.2f}% ({us10y_status})\n"
     msg += f"GC=F (Premium): {gcf_status}\n\n"
     msg += f"🐑 [Retail Sentiment]\n"
-    msg += f"S:{sentiment['short']}% / L:{sentiment['long']}% ({senti_status})\n\n"
+    msg += f"S:{sentiment.get('short',50)}% / L:{sentiment.get('long',50)}% ({senti_status})\n\n"
     msg += f"📅 [US Economic News Tonight]\n{today_news_str}\n"
     msg += f"⚠️ [Geo-Politics]\n{geo_str}\n\n"
-    msg += f"🤖 AI Prediction: หากโครงสร้างไม่เปลี่ยน แนะนำให้หาจุดเข้าฝั่ง {trend.replace('🟢','').replace('🔴','').strip()}"
+    msg += f"🤖 AI Prediction: หากโครงสร้างไม่เปลี่ยน แนะนำให้หาจุดเข้าฝั่ง {trend.replace('🟢','').replace('🔴','').replace('⚪','').strip()}"
     return msg
 
 # --- 8. VISUALIZER ---
@@ -577,6 +598,7 @@ def get_setup_time_html(setup_type, current_sig, base_color):
 # --- UI MAIN ---
 metrics, df_m15, df_h4, mt5_news = get_market_data()
 is_market_closed, status_msg = check_market_status(df_m15)
+current_session = get_current_session()
 
 ff_raw_news = get_forexfactory_usd()
 final_news_list, next_red_news = merge_news_sources(mt5_news, ff_raw_news)
@@ -618,7 +640,10 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR Room: Institutional Master Node v12.10")
+st.title("🦅 XAUUSD WAR Room: Institutional Master Node v12.11")
+
+# 🌐 ป้ายบอกสถานะเวลาตลาด Killzone กลับมาแล้ว
+st.markdown(f"<div class='session-card'>📍 Active Market Killzone: {current_session}</div>", unsafe_allow_html=True)
 
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
@@ -626,7 +651,7 @@ with c2: st.metric("GC=F", f"${metrics['GC_F'][0]:,.2f}", f"{metrics['GC_F'][1]:
 with c3: st.metric("DXY", f"{metrics['DXY'][0]:,.2f}", f"{metrics['DXY'][1]:.2f}%", delta_color="inverse")
 with c4: st.metric("US10Y", f"{metrics['US10Y'][0]:,.2f}", f"{metrics['US10Y'][1]:.2f}%", delta_color="inverse")
 with c5: st.metric("SPDR Flow", get_spdr_flow())
-with c6: st.metric("Retail Senti.", f"S:{sentiment['short']}%", f"L:{sentiment['long']}%", delta_color="off")
+with c6: st.metric("Retail Senti.", f"S:{sentiment.get('short',50)}%", f"L:{sentiment.get('long',50)}%", delta_color="off")
 
 if is_market_closed:
     st.markdown(f"<div style='text-align: center; color: #ff4444; font-size: 14px; margin-top: -5px; margin-bottom: 15px;'>{status_msg}</div>", unsafe_allow_html=True)
@@ -720,7 +745,6 @@ with col_normal:
 
 st.write("---")
 
-# 🟢 สร้างฟังก์ชันเล็กๆ สำหรับวาดกราฟ TradingView อย่างปลอดภัย 🟢
 def get_tv_html(symbol, height):
     return f"""
     <div class="tradingview-widget-container">
