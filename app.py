@@ -31,7 +31,7 @@ FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebaseda
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
 
 TELEGRAM_BOT_TOKEN = "8239625215:AAF7qUsz2O5mhINRhRYPTICljJsCErDDLD8"
-TELEGRAM_CHAT_ID = "5638824802"
+TELEGRAM_CHAT_ID = "-5078466063"
 
 st.markdown("""
 <style>
