@@ -525,6 +525,7 @@ speed_news = get_breaking_news()
 
 if not is_market_closed and df_m15 is not None: check_pending_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
+# 💡 ย้ายการคำนวณ Trend มาไว้ด้านบนก่อนเรียกใช้
 trend_h4_str = "ไซด์เวย์ ⚪"
 if df_h4 is not None and len(df_h4) >= 4:
     df_h4['ema50'] = ta.ema(df_h4['close'], length=50)
@@ -555,7 +556,6 @@ with st.sidebar:
     if st.button("Refresh Data", type="primary"): st.cache_data.clear()
     
     st.markdown("---")
-    # 💡 เพิ่มช่องกรอก SPDR Manual
     st.subheader("🏦 อัปเดตกองทุน SPDR")
     new_spdr = st.text_input("ระบุค่า SPDR ล่าสุด (เช่น +3.14)", value=st.session_state.spdr_manual)
     if new_spdr != st.session_state.spdr_manual:
@@ -583,14 +583,14 @@ with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1
 with c2: st.metric("GC=F", f"${metrics['GC_F'][0]:,.2f}", f"{metrics['GC_F'][1]:.2f}%")
 with c3: st.metric("DXY", f"{metrics['DXY'][0]:,.2f}", f"{metrics['DXY'][1]:.2f}%", delta_color="inverse")
 with c4: st.metric("US10Y", f"{metrics['US10Y'][0]:,.2f}", f"{metrics['US10Y'][1]:.2f}%", delta_color="inverse")
-# 💡 ดึงค่า SPDR จาก Sidebar มาโชว์
 with c5: st.metric("SPDR Flow", st.session_state.spdr_manual)
 with c6: st.metric("Retail Senti.", f"S:{sentiment.get('short',50)}%", f"L:{sentiment.get('long',50)}%", delta_color="off")
 
 st.markdown(f"<div style='text-align: center; color: {'#ff4444' if is_market_closed else '#00ff00'}; font-size: 14px; margin-top: -5px; margin-bottom: 15px;'>{status_msg}</div>", unsafe_allow_html=True)
+
+# 💡 เรียกใช้ Executive Summary แบบสมบูรณ์
 st.markdown(f"<div class='exec-summary'>{generate_exec_summary(trend_h4_str, trend_m15_str, metrics, next_red_news, sentiment)}</div>", unsafe_allow_html=True)
 
-# 💡 นำ EA Commander กลับมา (Poker Version)
 if is_market_closed: 
     ea_cmd, ea_desc, ea_color = "🛑 EA OFFLINE", "ตลาดปิดทำการ หรือขาดการเชื่อมต่อจาก MT5", "#888"
 else: 
