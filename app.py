@@ -216,7 +216,7 @@ def get_categorized_news():
                 news_list.append({'title_en': entry.title, 'title_th': translator.translate(entry.title), 'link': entry.link, 'time': date_str, 'score': final_score, 'direction': direction})
         except: pass
         return news_list
-    return fetch_rss("(Fed OR Powell OR Treasury)"), fetch_rss("(War OR Missile OR Israel OR Russia)")
+    return fetch_rss("(Fed OR Powell OR Treasury OR FOMC OR CPI)"), fetch_rss("(War OR Missile OR Israel OR Russia OR Iran OR USA OR Taiwan OR Houthi OR Strike)")
 
 @st.cache_data(ttl=300) 
 def get_breaking_news():
