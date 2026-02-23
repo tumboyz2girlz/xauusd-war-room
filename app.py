@@ -17,11 +17,11 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.15", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.16", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
-if 'spdr_manual' not in st.session_state: st.session_state.spdr_manual = "Neutral" # 💡 เพิ่มตัวแปรเก็บค่า SPDR
+if 'spdr_manual' not in st.session_state: st.session_state.spdr_manual = "Neutral"
 if 'last_logged_setup' not in st.session_state: st.session_state.last_logged_setup = ""
 if 'pending_trades' not in st.session_state: st.session_state.pending_trades = []
 if 'log_history' not in st.session_state: st.session_state.log_history = {} 
@@ -30,7 +30,6 @@ if 'last_us_open_summary_date' not in st.session_state: st.session_state.last_us
 # ⚠️ URL Firebase และ Google Sheet
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
-
 TELEGRAM_BOT_TOKEN = "8239625215:AAF7qUsz2O5mhINRhRYPTICljJsCErDDLD8"
 TELEGRAM_CHAT_ID = "-5078466063"
 
@@ -59,7 +58,7 @@ def send_telegram_notify(msg, image_path=None):
         with open(image_path, "rb") as image_file:
             files = {"photo": image_file}
             try: requests.post(url, data=data, files=files, timeout=10)
-            except: pass
+            except Exception as e: print("TG Image Error:", e)
     else:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
@@ -241,7 +240,7 @@ def get_breaking_news():
     speed_news.sort(key=lambda x: x['timestamp'], reverse=True)
     return speed_news[:10]
 
-# --- 4. CORE AI (Poker Mindset + 5 ดาว) ---
+# --- 4. CORE AI (Quant Mindset & 5-Star) ---
 def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news):
     if is_market_closed: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, False
         
@@ -288,56 +287,48 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
         hrs = next_red_news['hours']
         if -0.5 <= hrs <= 0.5:
             is_news_danger = True
-            news_warning = f"\n🚨 **DANGER (ข่าวออก):** สั่ง FOLD! งดเทรดช่วงข่าว '{next_red_news['title']}' โอกาสโดนลากสูง!"
+            news_warning = f"\n🚨 **DANGER (ระงับเทรด):** งดเข้าออเดอร์ ข่าวสำคัญ '{next_red_news['title']}' กำลังจะประกาศ!"
         elif 0.5 < hrs <= 3.0:
-            news_warning = f"\n⚠️ **WARNING (ระวังตัว):** ข่าว '{next_red_news['title']}' จะออกใน {hrs:.1f} ชม. แนะนำลดลอท (Bet sizing เล็กลง)"
+            news_warning = f"\n⚠️ **WARNING (ลดความเสี่ยง):** ข่าว '{next_red_news['title']}' จะออกใน {hrs:.1f} ชม. แนะนำลด Position Size"
 
     if is_flash_crash:
         setup = {'Entry': f"กด Sell ทันที หรือรอเด้งโซน $ {(current_m15['close'] + (0.5*atr)):.2f}", 'SL': f"$ {(current_m15['open'] + (0.5*atr)):.2f}", 'TP': f"$ {(current_m15['close'] - (3*atr)):.2f}"}
-        return "🚨 FLASH CRASH (SELL NOW!)", f"♠️ ไพ่พลิก! เทขายแดงเต็มแท่ง $ {red_body_size:.2f} สั่งแทง SELL ตามน้ำ!{news_warning}", setup, True
+        return "🚨 FLASH CRASH (SELL NOW!)", f"เกิดแรงเทขายผิดปกติ $ {red_body_size:.2f} สั่งแทง SELL ตามน้ำ!{news_warning}", setup, True
 
-    if is_news_danger: return "WAIT (News Danger 🛑)", f"🃏 FOLD! ระบบสั่งหมอบเพื่อหลบความผันผวนของข่าว{news_warning}", {}, False
-    if trend_m15 == "SIDEWAY": return "WAIT", f"🃏 CHECK! M15 ยังไซด์เวย์ รอไพ่ใบหน้า (Setup สวยๆ) ค่อยเล่น{news_warning}", {}, False
+    if is_news_danger: return "WAIT (News Danger 🛑)", f"ระบบระงับการเข้าเทรดเพื่อหลีกเลี่ยงความผันผวนของข่าว{news_warning}", {}, False
+    if trend_m15 == "SIDEWAY": return "WAIT", f"โครงสร้าง M15 ยังเป็นการพักตัว (Consolidation) รอยืนยันเทรนด์{news_warning}", {}, False
     
-    # --- ⭐ ระบบประเมิน 5 ดาว (Poker Matrix) ---
+    # --- ⭐ ระบบประเมิน 5 ดาว (Quant Matrix) ---
     stars = 1 
-    logic_details = [f"⭐ เสา 1: M15 ยืนยันเทรนด์ {trend_m15}"]
+    logic_details = [f"⭐ M15 มีโครงสร้างเทรนด์ {trend_m15} ชัดเจน"]
     
     if trend_m15 == trend_h4:
-        stars += 1
-        logic_details.append("⭐ เสา 2: H4/M15 เทรนด์ตรงกัน")
-    else: logic_details.append("➖ เสา 2: H4 ยังขัดแย้ง (Variance สูง เล่นสั้นเท่านั้น)")
+        stars += 1; logic_details.append("⭐ ไทม์เฟรมใหญ่ (H4) สอดคล้องกับไทม์เฟรมเล็ก (M15)")
+    else: logic_details.append("➖ H4 ขัดแย้งกับ M15 (แนะนำเทรดเก็บสั้น)")
 
     dxy_trend = metrics['DXY'][1]
     if (trend_m15 == "UP" and dxy_trend < 0) or (trend_m15 == "DOWN" and dxy_trend > 0):
-        stars += 1; logic_details.append("⭐ เสา 3: DXY สนับสนุน")
-    else: logic_details.append("➖ เสา 3: DXY ยังไม่หนุนทิศทาง")
+        stars += 1; logic_details.append("⭐ ดัชนี DXY เคลื่อนไหวสนับสนุนทิศทางทองคำ")
+    else: logic_details.append("➖ ดัชนี DXY ไม่ได้สนับสนุนทิศทาง")
 
     retail_short, retail_long = sentiment.get('short', 50), sentiment.get('long', 50)
     if (trend_m15 == "UP" and retail_short > 60) or (trend_m15 == "DOWN" and retail_long > 60):
-        stars += 1; logic_details.append("⭐ เสา 4: รายย่อยแทงสวนทาง (Smart Money)")
-    else: logic_details.append("➖ เสา 4: รายย่อยยังไม่เทน้ำหนัก")
+        stars += 1; logic_details.append("⭐ รายย่อยเทน้ำหนักฝั่งตรงข้าม (เทรดล่าสภาพคล่อง)")
+    else: logic_details.append("➖ สัดส่วนรายย่อยยังไม่เทไปฝั่งใดฝั่งหนึ่ง")
 
     if (trend_m15 == "UP" and macd_hist > 0) or (trend_m15 == "DOWN" and macd_hist < 0):
-        stars += 1; logic_details.append("⭐ เสา 5: MACD วอลลุ่มสนับสนุน")
+        stars += 1; logic_details.append("⭐ โมเมนตัม MACD สนับสนุนทิศทาง")
 
     star_str = "⭐" * stars
-    
-    # 🃏 Poker Recommendation based on Stars
-    poker_advice = ""
-    if stars == 5: poker_advice = "🔥 ไพ่ระดับ AA (All-In): Confluence ครบ 100% มั่นใจได้!"
-    elif stars >= 3: poker_advice = "⚡ ไพ่หน้าสวย (Call/Raise): โครงสร้างได้เปรียบ คุม MM แล้วจัดเลย!"
-    else: poker_advice = "⚠️ ไพ่ขอบ (Check/Fold): เหตุผลซัพพอร์ตน้อย แนะนำรอดูเชิงหรือลดลอท"
-
-    logic_str = f"**{poker_advice}**<br>" + "<br>".join(logic_details) + news_warning
+    logic_str = "<br>".join(logic_details) + news_warning
 
     if trend_m15 == "UP":
-        if rsi > 70: return f"WAIT (Overbought)", f"🃏 FOLD! RSI = {rsi:.1f} ห้ามไล่ราคา Buy เด็ดขาด! รอราคาย่อ{news_warning}", {}, False
+        if rsi > 70: return f"WAIT (Overbought)", f"RSI = {rsi:.1f} เข้าเขต Overbought ห้ามไล่ราคา ฝืนโมเมนตัม! รอราคาย่อตัว{news_warning}", {}, False
         setup = {'Entry': smc_entry if smc_found else f"🎯 โซน EMA $ {(ema-(0.5*atr)):.2f} - $ {ema:.2f}", 'SL': smc_sl if smc_found else f"$ {(ema-(2*atr)):.2f}", 'TP': smc_tp if smc_found else f"$ {(ema+(2*atr)):.2f}"}
         return f"BUY {star_str}", logic_str, setup, False
         
     elif trend_m15 == "DOWN":
-        if rsi < 30: return f"WAIT (Oversold)", f"🃏 FOLD! RSI = {rsi:.1f} ห้ามกด Sell ก้นเหว เด็ดขาด! รอราคาเด้ง{news_warning}", {}, False
+        if rsi < 30: return f"WAIT (Oversold)", f"RSI = {rsi:.1f} เข้าเขต Oversold ห้ามไล่ราคาขาย! รอราคาเด้งกลับขึ้นมา{news_warning}", {}, False
         setup = {'Entry': smc_entry if smc_found else f"🎯 โซน EMA $ {ema:.2f} - $ {(ema+(0.5*atr)):.2f}", 'SL': smc_sl if smc_found else f"$ {(ema+(2*atr)):.2f}", 'TP': smc_tp if smc_found else f"$ {(ema-(2*atr)):.2f}"}
         return f"SELL {star_str}", logic_str, setup, False
 
@@ -363,37 +354,57 @@ def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_
     else: return "WAIT", "⚪ ไม่มีข่าวกล่องแดงในระยะนี้", {}, "⚪"
         
     found_sweep, direction, sweep_price, current_price = detect_choch_and_sweep(df_m15)
-    if not found_sweep: return "WAIT", "🟢 ข่าวออกแล้ว แต่ยังไม่พบ CHoCH & Liquidity Sweep", {}, "🟢"
+    if not found_sweep: return "WAIT", "🟢 ข่าวออกแล้ว แต่ยังไม่พบโครงสร้าง Liquidity Sweep", {}, "🟢"
         
     dxy_trend, gcf_trend = metrics['DXY'][1], metrics['GC_F'][1]
     if direction == "BUY":
-        if dxy_trend > 0: return "WAIT", "DXY ยังแข็งค่า (ขัดแย้ง)", {}, "🟢"
-        if gcf_trend < 0: return "WAIT", "GC=F Premium ไม่หนุนขาขึ้น", {}, "🟢"
-        if sentiment['short'] < 75.0: return "WAIT", f"รายย่อยยัง Short ไม่พอ ({sentiment['short']}%)", {}, "🟢"
+        if dxy_trend > 0: return "WAIT", "DXY ยังแข็งค่า (ขัดแย้งกับสัญญาณ)", {}, "🟢"
+        if gcf_trend < 0: return "WAIT", "GC=F Premium ไม่สนับสนุนทิศทาง", {}, "🟢"
+        if sentiment['short'] < 75.0: return "WAIT", f"รายย่อยยังสะสมฝั่ง Short ไม่พอ ({sentiment['short']}%)", {}, "🟢"
         entry, sl = current_price - 1.0, max(sweep_price - 0.5, current_price - 4.0)
-        return "ALL-IN BUY 🚀", f"Confluence 100%! ตั้ง Buy Limit ดักรอย่อ", {'Entry': f"🎯 โซน $ {(entry-1.0):.2f} - $ {entry:.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry + ((entry - sl) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
+        return "ALL-IN BUY 🚀", f"Confluence ครบ 100% รอเข้าซื้อจังหวะย่อ", {'Entry': f"🎯 โซน $ {(entry-1.0):.2f} - $ {entry:.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry + ((entry - sl) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
         
     elif direction == "SELL":
-        if dxy_trend < 0: return "WAIT", "DXY ยังอ่อนค่า (ขัดแย้ง)", {}, "🟢"
-        if gcf_trend > 0: return "WAIT", "GC=F Premium ไม่หนุนขาลง", {}, "🟢"
-        if sentiment['long'] < 75.0: return "WAIT", f"รายย่อยยัง Buy ไม่พอ ({sentiment['long']}%)", {}, "🟢"
+        if dxy_trend < 0: return "WAIT", "DXY ยังอ่อนค่า (ขัดแย้งกับสัญญาณ)", {}, "🟢"
+        if gcf_trend > 0: return "WAIT", "GC=F Premium ไม่สนับสนุนทิศทาง", {}, "🟢"
+        if sentiment['long'] < 75.0: return "WAIT", f"รายย่อยยังสะสมฝั่ง Buy ไม่พอ ({sentiment['long']}%)", {}, "🟢"
         entry, sl = current_price + 1.0, min(sweep_price + 0.5, current_price + 4.0)
-        return "ALL-IN SELL 🚀", f"Confluence 100%! ตั้ง Sell Limit ดักรอเด้ง", {'Entry': f"🎯 โซน $ {entry:.2f} - $ {(entry+1.0):.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry - ((sl - entry) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
+        return "ALL-IN SELL 🚀", f"Confluence ครบ 100% รอเทขายจังหวะเด้ง", {'Entry': f"🎯 โซน $ {entry:.2f} - $ {(entry+1.0):.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry - ((sl - entry) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
 
     return "WAIT", "รอ...", {}, light
 
-# 💡 ฟังก์ชันควบคุม EA Commander (Poker Style)
+# 💡 ฟังก์ชันควบคุม EA Commander (Quant Style)
 def get_ea_commander_status(trend_m15_str, trend_h4_str, is_flash_crash, rsi):
     if is_flash_crash:
-        return "🚨 FOLD: HARD CUT (ปิด EA ทันที!)", "เกิด Flash Crash ดิ่งลงแรง (High Variance) ปิด EA เพื่อรักษาชิป (เงินทุน) ห้ามถัวเด็ดขาด!", "#ff3333"
+        return "🚨 HARD CUT (ปิด EA ทันที!)", "ตรวจพบความผันผวนรุนแรง (High Variance) ปิด EA เพื่อรักษาเงินทุน ห้ามถัวเด็ดขาด!", "#ff3333"
     if rsi > 75 or rsi < 25:
-        return "⚠️ CHECK: PAUSE EA (ห้ามเปิดออเดอร์ใหม่)", "RSI เข้าเขตสุดโต่ง โอกาสโดนลากสูง พัก EA รอราคาเข้าโซน POI ก่อนลุยต่อ", "#ffcc00"
+        return "⚠️ PAUSE EA (ห้ามเปิดออเดอร์ใหม่)", "RSI เข้าเขตสุดโต่ง โอกาสโดนลากสูง พัก EA รอราคาเข้าโซนสมดุล", "#ffcc00"
     if trend_m15_str == "ไซด์เวย์ ⚪" and trend_h4_str == "ไซด์เวย์ ⚪":
-        return "🟡 CALL: LOW RISK (รันไซด์เวย์กรอบแคบ)", "ตลาดสะสมพลัง (Low Variance) สามารถรัน Grid ระยะสั้นเก็บ Cash Flow ได้เบาๆ", "#f0b90b"
+        return "🟡 LOW RISK MODE (รันไซด์เวย์)", "ตลาดสะสมพลัง (Low Volatility) เหมาะกับการรัน Grid เก็บกรอบแคบ", "#f0b90b"
     if trend_m15_str != trend_h4_str:
-        return "🟡 CALL: CAUTION (เทรนด์ขัดแย้ง)", "ไทม์เฟรมใหญ่เล็กไม่ตรงกัน แนะนำรัน EA ลอทต่ำ หรือรอไพ่สวยกว่านี้", "#ffcc00"
+        return "🟡 CAUTION (ลดความเสี่ยง)", "ไทม์เฟรมใหญ่และเล็กขัดแย้งกัน แนะนำปรับลดขนาด Lot Size ของ EA", "#ffcc00"
     
-    return "🟢 RAISE: FULL GRID (รันเต็มสูบ!)", f"ไพ่สวย! กราฟ H4 และ M15 ไหลลื่นเป็นทางเดียวกัน ({trend_m15_str}) กาง Grid ดักตามเทรนด์ได้เลย", "#00ff00"
+    return "🟢 TREND FOLLOWING (FULL GRID)", f"โครงสร้าง H4 และ M15 สอดคล้องกัน ({trend_m15_str}) กาง Grid ดักตามเทรนด์ได้เต็มกำลัง", "#00ff00"
+
+# 🧮 ฟังก์ชันคำนวณคณิตศาสตร์ (EV & RR)
+def calculate_ev_stats(entry_str, sl_str, tp_str, stars):
+    def get_num(s):
+        nums = [float(x) for x in re.findall(r'\d+\.\d+', str(s).replace(',', ''))]
+        return sum(nums)/len(nums) if nums else 0.0
+        
+    entry, sl, tp = get_num(entry_str), get_num(sl_str), get_num(tp_str)
+    if entry == 0 or sl == 0 or tp == 0: return 0, 0, 0, 0, 0
+    
+    risk = abs(entry - sl)
+    reward = abs(tp - entry)
+    if risk == 0: risk = 0.001
+    rr = reward / risk
+    
+    win_rates = {5: 0.80, 4: 0.65, 3: 0.50, 2: 0.35, 1: 0.20}
+    wr = win_rates.get(stars, 0.50)
+    
+    ev_r = (wr * rr) - ((1 - wr) * 1)
+    return risk, reward, rr, wr*100, ev_r
 
 def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
     if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
@@ -406,17 +417,36 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
         trade_id = f"TRD-{int(time.time())}"
         thai_dt_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=7)).strftime("%d %b %Y | %H:%M น.")
         now_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S")
-        clean_reason = re.sub('<[^<]+>', '', reason_text).strip()
+        
+        # 💡 ลบ <br> ออกเพื่อให้ TG แสดงผลสวยงาม
+        clean_reason = re.sub('<[^<]+>', '\n- ', reason_text).strip()
+        if clean_reason.startswith("- "): clean_reason = clean_reason[2:]
+
         is_long = "BUY" in sig
-        entry_val = extract_price(setup_data.get('Entry', ''), is_long, True)
-        sl_val = extract_price(setup_data.get('SL', ''))
-        tp_val = extract_price(setup_data.get('TP', ''))
+        stars_count = sig.count("⭐") if "⭐" in sig else 5 # ALL-IN ตีเป็น 5 ดาว
+        
+        # ดึงราคาและคำนวณ EV
+        entry_str = setup_data.get('Entry', '')
+        sl_str = setup_data.get('SL', '')
+        tp_str = setup_data.get('TP', '')
+        risk, reward, rr, wr_pct, ev_r = calculate_ev_stats(entry_str, sl_str, tp_str, stars_count)
+
+        def extract_price(t, is_long, is_entry):
+            p = [float(x) for x in re.findall(r'\d+\.\d+', str(t).replace(',', ''))]
+            if not p: return 0.0
+            if len(p) == 1: return p[0]
+            if is_entry: return max(p) if is_long else min(p)
+            return p[0]
+
+        entry_val = extract_price(entry_str, is_long, True)
+        sl_val = extract_price(sl_str, False, False)
+        tp_val = extract_price(tp_str, False, False)
         is_market = "NOW" in sig 
 
-        payload = {"action": "log", "id": trade_id, "timestamp": now_str, "setup_type": setup_type, "signal": sig, "entry": setup_data.get('Entry', ''), "sl": setup_data.get('SL', ''), "tp": setup_data.get('TP', ''), "reason": clean_reason}
+        payload = {"action": "log", "id": trade_id, "timestamp": now_str, "setup_type": setup_type, "signal": sig, "entry": entry_str, "sl": sl_str, "tp": tp_str, "reason": clean_reason}
         internal_trade = payload.copy()
         internal_trade['activated'], internal_trade['entry_val'], internal_trade['sl_val'], internal_trade['tp_val'] = is_market, entry_val, sl_val, tp_val
-        internal_trade['display_time'], internal_trade['display_entry'], internal_trade['display_tp'], internal_trade['display_sl'], internal_trade['display_reason'] = thai_dt_str, setup_data.get('Entry', ''), setup_data.get('TP', ''), setup_data.get('SL', ''), clean_reason
+        internal_trade['display_time'], internal_trade['display_entry'], internal_trade['display_tp'], internal_trade['display_sl'], internal_trade['display_reason'] = thai_dt_str, entry_str, tp_str, sl_str, clean_reason
 
         requests.post(GOOGLE_SHEET_API_URL, json=payload, timeout=3)
         st.session_state.pending_trades.append(internal_trade)
@@ -424,10 +454,33 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
         img_path = "setup_chart.png"
         fig = plot_setup_chart(df_m15, setup_data, mode="All-In" if "All-In" in setup_type else "Normal")
         if fig:
-            try: fig.write_image(img_path)
-            except: img_path = None
+            try: 
+                fig.write_image(img_path)
+                time.sleep(1) # รอให้เซฟไฟล์เสร็จ
+            except Exception as img_e: 
+                print("Image Gen Error:", img_e)
+                img_path = None
 
-        tg_msg = f"🎯 [NEW SETUP] แจ้งเตือนจุดเข้า!\n⏰ เวลาอัปเดต: {thai_dt_str}\n\nMode: {setup_type}\nSignal: {sig}\n\n📍 Entry: {internal_trade['display_entry']}\n🛑 SL: {internal_trade['display_sl']}\n💰 TP: {internal_trade['display_tp']}\n\n🧠 5-Pillar & Poker Logic:\n{clean_reason}"
+        # 💡 อัปเกรด Template Telegram แบบ Quant
+        tg_msg = f"🎯 [NEW SETUP] แจ้งเตือนจุดเข้า!\n"
+        tg_msg += f"⏰ เวลาออก Setup: {thai_dt_str}\n\n"
+        tg_msg += f"Mode: {setup_type}\n"
+        tg_msg += f"Signal: {sig}\n\n"
+        tg_msg += f"📍 Entry: {entry_str}\n"
+        if risk > 0:
+            tg_msg += f"🛑 SL: {sl_str} (Risk = ${risk:.2f})\n"
+            tg_msg += f"💰 TP: {tp_str} (Reward = ${reward:.2f})\n"
+            tg_msg += f"🧮 Risk:Reward: 1:{rr:.2f}\n\n"
+        else:
+            tg_msg += f"🛑 SL: {sl_str}\n💰 TP: {tp_str}\n\n"
+            
+        tg_msg += f"❓ Why?:\n- {clean_reason}\n\n"
+        
+        if risk > 0:
+            ev_status = "Positive EV คุ้มค่าที่จะเสี่ยง! ✅" if ev_r > 0 else "Negative EV ความเสี่ยงสูง ⚠️"
+            tg_msg += f"🎲 Implied Win Rate: {int(wr_pct)}% (ระดับ {stars_count} ดาว)\n"
+            tg_msg += f"📈 Expected Value (EV): {ev_r:+.2f} R ({ev_status})"
+
         send_telegram_notify(tg_msg, img_path)
     except Exception as e: print("Log Error:", e)
 
@@ -476,7 +529,7 @@ def generate_telegram_us_briefing(trend_h4_str, trend_m15_str, metrics, sentimen
     today_news_str = "".join([f"- {ev['time']} น. : {ev['title']}\n" for ev in final_news_list if ev['dt'].date() == now_thai.date() and ev['impact'] == 'High']) or "- ไม่มีข่าวกล่องแดงคืนนี้ ✅\n"
     geo_str = f"- {war_news[0]['title_th']} (Impact: {war_news[0]['score']:.1f}/10) {war_news[0]['direction']}" if war_news else "- สงบสุข ไม่มีข่าวฉุกเฉิน ⚪"
 
-    msg = f"🗽🇺🇸 US Session Briefing 🇺🇸🗽\nประจำวันที่: {now_thai.strftime('%d %b %Y | 19:30 น.')}\n\n📊 [Technical]\nTrend H4: {trend_h4_str}\nTrend M15 (ล่าสุด): {trend_m15_str}\nXAUUSD: ${metrics['GOLD'][0]:.2f}\n\n💵 [Macro / 5 Pillars]\nDXY: {metrics['DXY'][0]:.2f} ({dxy_status})\nUS10Y: {metrics['US10Y'][0]:.2f}% ({us10y_status})\nGC=F (Premium): {gcf_status}\nSPDR Fund: {spdr_val}\n\n🐑 [Retail Sentiment]\nS:{sentiment.get('short',50)}% / L:{sentiment.get('long',50)}% ({senti_status})\n\n📅 [US Economic News Tonight]\n{today_news_str}\n⚠️ [Geo-Politics]\n{geo_str}\n\n🤖 AI Prediction: โฟกัสจุดเข้าตามเทรนด์ M15 และคุม Variance ตามหลัก Poker Mindset"
+    msg = f"🗽🇺🇸 US Session Briefing 🇺🇸🗽\nประจำวันที่: {now_thai.strftime('%d %b %Y | 19:30 น.')}\n\n📊 [Technical]\nTrend H4: {trend_h4_str}\nTrend M15 (ล่าสุด): {trend_m15_str}\nXAUUSD: ${metrics['GOLD'][0]:.2f}\n\n💵 [Macro / 5 Pillars]\nDXY: {metrics['DXY'][0]:.2f} ({dxy_status})\nUS10Y: {metrics['US10Y'][0]:.2f}% ({us10y_status})\nGC=F (Premium): {gcf_status}\nSPDR Fund: {spdr_val}\n\n🐑 [Retail Sentiment]\nS:{sentiment.get('short',50)}% / L:{sentiment.get('long',50)}% ({senti_status})\n\n📅 [US Economic News Tonight]\n{today_news_str}\n⚠️ [Geo-Politics]\n{geo_str}\n\n🤖 AI Prediction: โฟกัสจุดเข้าตามเทรนด์ M15 และคุม Position Size ตามหลัก Positive EV"
     return msg
 
 def plot_setup_chart(df, setup_dict, mode="Normal"):
@@ -525,7 +578,6 @@ speed_news = get_breaking_news()
 
 if not is_market_closed and df_m15 is not None: check_pending_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
-# 💡 ย้ายการคำนวณ Trend มาไว้ด้านบนก่อนเรียกใช้
 trend_h4_str = "ไซด์เวย์ ⚪"
 if df_h4 is not None and len(df_h4) >= 4:
     df_h4['ema50'] = ta.ema(df_h4['close'], length=50)
@@ -575,7 +627,7 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR Room: 5-Star Quant Setup")
+st.title("🦅 XAUUSD WAR Room: Institutional Quant Setup")
 st.markdown(f"<div class='session-card'>📍 Active Market Killzone: {current_session}</div>", unsafe_allow_html=True)
 
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
@@ -587,8 +639,6 @@ with c5: st.metric("SPDR Flow", st.session_state.spdr_manual)
 with c6: st.metric("Retail Senti.", f"S:{sentiment.get('short',50)}%", f"L:{sentiment.get('long',50)}%", delta_color="off")
 
 st.markdown(f"<div style='text-align: center; color: {'#ff4444' if is_market_closed else '#00ff00'}; font-size: 14px; margin-top: -5px; margin-bottom: 15px;'>{status_msg}</div>", unsafe_allow_html=True)
-
-# 💡 เรียกใช้ Executive Summary แบบสมบูรณ์
 st.markdown(f"<div class='exec-summary'>{generate_exec_summary(trend_h4_str, trend_m15_str, metrics, next_red_news, sentiment)}</div>", unsafe_allow_html=True)
 
 if is_market_closed: 
@@ -598,7 +648,7 @@ else:
 
 st.markdown(f"""
 <div class="ea-card" style="border-color: {ea_color};">
-    <h3 style="margin:0; color:{ea_color};">🎰 EA Commander (Poker Mindset)</h3>
+    <h3 style="margin:0; color:{ea_color};">🤖 EA Commander (Risk Management)</h3>
     <div style='color:{ea_color}; font-size:18px; font-weight:bold; margin-top:10px;'>{ea_cmd}</div>
     <div style='color:#fff; font-size:14px; margin-top:5px;'><b>คำแนะนำ:</b> {ea_desc}</div>
 </div>
@@ -617,7 +667,7 @@ with col_allin:
     <div class="allin-card">
         <h3 style="margin:0; color:#ffcc00;">{light} All-In Commander</h3>
         <div style="color:{'#888' if 'CLOSED' in sig_allin else ('#ffcc00' if 'WAIT' in sig_allin else '#00ff00')}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_allin}</div>
-        <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Logic:</b> {reason_allin}</div>
+        <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Logic:</b><br>{reason_allin.replace('<br>', '<br>- ')}</div>
         {time_html_allin}
     """, unsafe_allow_html=True)
     if setup_allin:
@@ -635,7 +685,7 @@ with col_normal:
             
     st.markdown(f"""
     <div class="plan-card">
-        <h3 style="margin:0; color:#00ccff;">🃏 Daily Setup (Poker Mode)</h3>
+        <h3 style="margin:0; color:#00ccff;">🃏 Daily Setup (Quant Mode)</h3>
         <div style="color:{'#ffcc00' if 'WAIT' in sig_norm else '#00ff00'}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_norm}</div>
         <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Score & Logic:</b><br>{reason_norm}</div>
         {time_html_norm}
