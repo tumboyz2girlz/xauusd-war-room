@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.11", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.12", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -26,10 +26,10 @@ if 'pending_trades' not in st.session_state: st.session_state.pending_trades = [
 if 'log_history' not in st.session_state: st.session_state.log_history = {} 
 if 'last_us_open_summary_date' not in st.session_state: st.session_state.last_us_open_summary_date = ""
 
+# ⚠️ URL Firebase และ Google Sheet
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
 
-# 🟢 TELEGRAM API CONFIGURATION 🟢
 TELEGRAM_BOT_TOKEN = "8239625215:AAF7qUsz2O5mhINRhRYPTICljJsCErDDLD8"
 TELEGRAM_CHAT_ID = "5638824802"
 
@@ -76,20 +76,29 @@ def get_market_data():
         res = requests.get(FIREBASE_URL, timeout=5)
         if res.status_code == 200 and res.json() is not None:
             data = res.json()
+            
+            # XAUUSD M15
             if 'XAUUSD' in data:
                 df_xau = pd.DataFrame(data['XAUUSD'])
                 df_xau.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
                 curr_gold, prev_gold = float(df_xau['close'].iloc[-1]), float(df_xau['close'].iloc[-2])
                 metrics['GOLD'] = (curr_gold, ((curr_gold - prev_gold) / prev_gold) * 100)
                 df_m15 = df_xau
+                
+            # XAUUSD H4
             if 'XAUUSD_H1' in data:
                 df_h1 = pd.DataFrame(data['XAUUSD_H1'])
                 df_h1.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
                 df_h4 = df_h1
+                
+            # DXY จาก MT5 (ฉับไวที่สุด)
             if 'DXY' in data:
                 df_dxy = pd.DataFrame(data['DXY'])
-                curr_dxy, prev_dxy = float(df_dxy['c'].iloc[-1]), float(df_dxy['c'].iloc[-2])
+                df_dxy.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
+                curr_dxy, prev_dxy = float(df_dxy['close'].iloc[-1]), float(df_dxy['close'].iloc[-2])
                 metrics['DXY'] = (curr_dxy, ((curr_dxy - prev_dxy) / prev_dxy) * 100)
+                
+            # ข่าวจาก MT5
             if 'NEWS' in data:
                 now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
                 for ev in data['NEWS']:
@@ -104,6 +113,7 @@ def get_market_data():
                     })
     except: pass
 
+    # ดึงข้อมูลเพิ่มเติมจาก Yahoo Finance เป็น Confluence
     try:
         h_gcf = yf.Ticker("GC=F").history(period="5d", interval="15m")
         if not h_gcf.empty and len(h_gcf) >= 2: metrics['GC_F'] = (h_gcf['Close'].iloc[-1], ((h_gcf['Close'].iloc[-1]-h_gcf['Close'].iloc[-2])/h_gcf['Close'].iloc[-2])*100)
@@ -135,7 +145,6 @@ def get_current_session():
     if 5 <= h < 14: sessions.append("🌏 Asia Session")
     if 14 <= h < 23: sessions.append("💶 Europe/London Session")
     if h >= 19 or h < 4: sessions.append("🗽 US/New York Session")
-    
     if not sessions: return "🌙 Market Transition / Low Liquidity"
     return " | ".join(sessions)
 
@@ -171,14 +180,36 @@ def get_forexfactory_usd():
         return ff_news
     except: return []
 
+# 💡 การ Merge ข่าวที่ฉลาดขึ้น: ให้ MT5 เป็นใหญ่
 def merge_news_sources(mt5_list, ff_list):
-    merged = mt5_list + [f for f in ff_list if not any(abs((f['dt']-m['dt']).total_seconds())<=3600 for m in mt5_list)]
+    merged = []
+    # 1. เอา MT5 เป็นแกนหลัก (ความเร็วสูงสุด)
+    for mt5_news in mt5_list:
+        merged.append(mt5_news)
+        
+    # 2. เอา FF มาเสริมเฉพาะที่ MT5 ไม่มี
+    for ff_news in ff_list:
+        is_duplicate = False
+        for m_news in merged:
+            time_diff_sec = abs((ff_news['dt'] - m_news['dt']).total_seconds())
+            ff_keyword = ff_news['title'].split()[0].lower()
+            mt5_keyword = m_news['title'].split()[0].lower()
+            
+            if time_diff_sec <= 3600 and (ff_keyword in m_news['title'].lower() or mt5_keyword in ff_news['title'].lower()):
+                is_duplicate = True
+                break
+                
+        if not is_duplicate:
+            merged.append(ff_news)
+
     merged.sort(key=lambda x: x['dt'])
+    
     next_red_news = None
     for ev in merged:
         if ev['impact'] == 'High' and -0.5 <= ev['time_diff_hours'] <= 3:
             if next_red_news is None or ev['time_diff_hours'] < next_red_news['hours']:
                 next_red_news = {'title': ev['title'], 'hours': ev['time_diff_hours'], 'time': ev['dt'].strftime("%H:%M น.")}
+                
     return merged, next_red_news
 
 @st.cache_data(ttl=600)
@@ -640,9 +671,8 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR Room: Institutional Master Node v12.11")
+st.title("🦅 XAUUSD WAR Room: Institutional Master Node v12.12")
 
-# 🌐 ป้ายบอกสถานะเวลาตลาด Killzone กลับมาแล้ว
 st.markdown(f"<div class='session-card'>📍 Active Market Killzone: {current_session}</div>", unsafe_allow_html=True)
 
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
