@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.28", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.29", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -102,7 +102,7 @@ def get_market_data():
             if 'NEWS' in data:
                 now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
                 for ev in data['NEWS']:
-                    try:
+                    try: 
                         event_dt = datetime.datetime.utcfromtimestamp(float(ev['time_sec'])) + datetime.timedelta(hours=7)
                         time_diff_hours = (event_dt - now_thai).total_seconds() / 3600
                         time_str = event_dt.strftime("%d %b | %H:%M น.")
@@ -314,6 +314,7 @@ def detect_choch_and_sweep(df):
     if recent['high'].iloc[-5:-1].max() > highest_high and current_close < recent['low'].iloc[-5:-1].min(): return True, "SELL", recent['high'].iloc[-5:-1].max(), current_close
     return False, "", 0, 0
 
+# --- 🧠 THE "ONE SHOT, ONE KILL" & BREAKEVEN SYSTEM ---
 @st.cache_resource
 def get_trade_memory():
     return {"Normal Setup": None, "All-In Setup": None}
@@ -328,18 +329,36 @@ def check_active_trades(current_high, current_low):
         
         is_long = "BUY" in trade['signal']
         
+        # 1. ตรวจสอบการเข้าออเดอร์
         if not trade['activated']:
             if is_long and current_low <= trade['entry_val']: trade['activated'] = True
             elif not is_long and current_high >= trade['entry_val']: trade['activated'] = True
             
         if trade['activated']:
             result = None
+            
+            # 💡 2. ระบบ Breakeven Protector (เช็ควิ่งไป 50% หรือยัง)
+            if not trade.get('is_breakeven', False):
+                if is_long and current_high >= trade['mid_val']:
+                    trade['is_breakeven'] = True
+                    trade['sl_val'] = trade['entry_val'] + 1.0 # บังหน้าทุน +1$
+                    send_telegram_notify(f"🚨 [UPDATE: Risk Free] {mode}\n\n✨ ราคาวิ่งไป 50% ของเป้าหมาย TP แล้ว!\n👉 ระบบจำลองขยับ SL มาบังหน้าทุนที่ ${trade['sl_val']:.2f}\n(หากราคาย้อนกลับ จะถือว่าเสมอตัว Breakeven)")
+                elif not is_long and current_low <= trade['mid_val']:
+                    trade['is_breakeven'] = True
+                    trade['sl_val'] = trade['entry_val'] - 1.0 # บังหน้าทุน +1$
+                    send_telegram_notify(f"🚨 [UPDATE: Risk Free] {mode}\n\n✨ ราคาวิ่งไป 50% ของเป้าหมาย TP แล้ว!\n👉 ระบบจำลองขยับ SL มาบังหน้าทุนที่ ${trade['sl_val']:.2f}\n(หากราคาย้อนกลับ จะถือว่าเสมอตัว Breakeven)")
+
+            # 3. ตรวจสอบการชน TP / SL
             if is_long:
-                if current_low <= trade['sl_val']: result = "Lose / SL ❌"
-                elif current_high >= trade['tp_val']: result = "Win / TP ✅"
+                if current_low <= trade['sl_val']: 
+                    result = "Breakeven (เสมอตัว) 🛡️" if trade.get('is_breakeven') else "Lose / SL ❌"
+                elif current_high >= trade['tp_val']: 
+                    result = "Win / TP ✅"
             else:
-                if current_high >= trade['sl_val']: result = "Lose / SL ❌"
-                elif current_low <= trade['tp_val']: result = "Win / TP ✅"
+                if current_high >= trade['sl_val']: 
+                    result = "Breakeven (เสมอตัว) 🛡️" if trade.get('is_breakeven') else "Lose / SL ❌"
+                elif current_low <= trade['tp_val']: 
+                    result = "Win / TP ✅"
                 
             if result:
                 try: requests.post(GOOGLE_SHEET_API_URL, json={"action": "update", "id": trade['id'], "result": result}, timeout=3)
@@ -363,6 +382,7 @@ def check_active_trades(current_high, current_low):
                 send_telegram_notify(tg_msg)
                 memory[mode] = None 
 
+# --- 4. CORE AI ---
 def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir):
     if is_market_closed or df_m15 is None or len(df_m15) < 50: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, False
     
@@ -556,6 +576,9 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
         sl_val = extract_price(sl_str, False, False)
         tp_val = extract_price(tp_str, False, False)
         is_market = "NOW" in sig 
+        
+        # 💡 คำนวณจุดกึ่งกลาง (50% TP)
+        mid_val = entry_val + ((tp_val - entry_val) / 2) if entry_val > 0 else 0.0
 
         trade_dict = {
             "id": trade_id,
@@ -571,7 +594,9 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
             "entry_val": entry_val,
             "sl_val": sl_val,
             "tp_val": tp_val,
+            "mid_val": mid_val, # เก็บ 50% TP ไว้ตรวจจับ
             "activated": is_market,
+            "is_breakeven": False, # สถานะการขยับบังทุน
             "timestamp_sec": now
         }
         memory[setup_type] = trade_dict
@@ -722,14 +747,13 @@ if not is_market_closed and now_thai.hour == 19 and now_thai.minute >= 30 and st
     st.session_state.last_us_open_summary_date = current_date_str
 
 # --- ส่วน UI ---
-st.title("🦅 XAUUSD WAR Room: Institutional Quant Setup (v12.28)")
+st.title("🦅 XAUUSD WAR Room: Institutional Quant Setup (v12.29)")
 st.markdown(f"<div class='session-card'>📍 Active Market Killzone: {current_session}</div>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("💻 War Room Terminal")
     layout_mode = st.radio("Display:", ["🖥️ Desktop", "📱 Mobile"])
     
-    # 💡 ปุ่ม Reboot ฉุกเฉินเพื่อล้าง Cache ทิ้ง
     if st.button("🔄 Refresh & Clear Cache", type="primary"): 
         st.cache_data.clear()
         st.rerun()
@@ -760,7 +784,6 @@ with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1
 with c2: st.metric("GC=F", f"${metrics['GC_F'][0]:,.2f}", f"{metrics['GC_F'][1]:.2f}%")
 with c3: st.metric("DXY", f"{metrics['DXY'][0]:,.2f}", f"{metrics['DXY'][1]:.2f}%", delta_color="inverse")
 with c4: st.metric("US10Y", f"{metrics['US10Y'][0]:,.2f}", f"{metrics['US10Y'][1]:.2f}%", delta_color="inverse")
-# 💡 นำ SPDR ไปเข้าตัวแปลภาษาตรงนี้
 with c5: st.metric("SPDR Flow", interpret_spdr(st.session_state.spdr_manual))
 with c6: st.metric("Retail Senti.", f"S:{sentiment.get('short',50)}%", f"L:{sentiment.get('long',50)}%", delta_color="off")
 
