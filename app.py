@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.18", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.19", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -27,7 +27,6 @@ if 'pending_trades' not in st.session_state: st.session_state.pending_trades = [
 if 'log_history' not in st.session_state: st.session_state.log_history = {} 
 if 'last_us_open_summary_date' not in st.session_state: st.session_state.last_us_open_summary_date = ""
 
-# ⚠️ URL Firebase และ Google Sheet
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
 TELEGRAM_BOT_TOKEN = "8239625215:AAF7qUsz2O5mhINRhRYPTICljJsCErDDLD8"
@@ -56,16 +55,15 @@ def send_telegram_notify(msg, image_path=None):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         data = {"chat_id": TELEGRAM_CHAT_ID, "caption": msg}
         with open(image_path, "rb") as image_file:
-            files = {"photo": image_file}
-            try: requests.post(url, data=data, files=files, timeout=10)
-            except Exception as e: print("TG Image Error:", e)
+            try: requests.post(url, data=data, files={"photo": image_file}, timeout=10)
+            except: pass
     else:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
         try: requests.post(url, json=data, timeout=5)
         except: pass
 
-# --- 2. DATA ENGINE ---
+# --- 2. DATA ENGINE (🛡️ ใส่เกราะกัน Error ประเภทข้อมูล) ---
 @st.cache_data(ttl=30)
 def get_market_data():
     metrics = {'GOLD': (0.0, 0.0), 'GC_F': (0.0, 0.0), 'DXY': (0.0, 0.0), 'US10Y': (0.0, 0.0)}
@@ -77,16 +75,22 @@ def get_market_data():
             if 'XAUUSD' in data:
                 df_xau = pd.DataFrame(data['XAUUSD'])
                 df_xau.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
+                for col in ['open', 'high', 'low', 'close']: df_xau[col] = pd.to_numeric(df_xau[col], errors='coerce') # 🛡️ บังคับเป็นตัวเลข
+                df_xau.dropna(inplace=True)
                 curr_gold, prev_gold = float(df_xau['close'].iloc[-1]), float(df_xau['close'].iloc[-2])
                 metrics['GOLD'] = (curr_gold, ((curr_gold - prev_gold) / prev_gold) * 100)
                 df_m15 = df_xau
             if 'XAUUSD_H1' in data:
                 df_h1 = pd.DataFrame(data['XAUUSD_H1'])
                 df_h1.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
+                for col in ['open', 'high', 'low', 'close']: df_h1[col] = pd.to_numeric(df_h1[col], errors='coerce') # 🛡️ บังคับเป็นตัวเลข
+                df_h1.dropna(inplace=True)
                 df_h4 = df_h1
             if 'DXY' in data:
                 df_dxy = pd.DataFrame(data['DXY'])
                 df_dxy.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
+                for col in ['open', 'high', 'low', 'close']: df_dxy[col] = pd.to_numeric(df_dxy[col], errors='coerce')
+                df_dxy.dropna(inplace=True)
                 curr_dxy, prev_dxy = float(df_dxy['close'].iloc[-1]), float(df_dxy['close'].iloc[-2])
                 metrics['DXY'] = (curr_dxy, ((curr_dxy - prev_dxy) / prev_dxy) * 100)
             if 'NEWS' in data:
@@ -94,14 +98,9 @@ def get_market_data():
                 for ev in data['NEWS']:
                     event_dt = datetime.datetime.fromtimestamp(ev['time_sec']) 
                     time_diff_hours = (event_dt - now_thai).total_seconds() / 3600
-                    mt5_news.append({
-                        'source': 'MT5', 'title': ev['title'], 
-                        'time': event_dt.strftime("%H:%M"), 'impact': ev['impact'], 
-                        'actual': st.session_state.manual_overrides.get(ev['title'], ev['actual']), 
-                        'forecast': ev['forecast'], 'direction': ev.get('direction', ''), 
-                        'dt': event_dt, 'time_diff_hours': time_diff_hours
-                    })
-    except: pass
+                    mt5_news.append({'source': 'MT5', 'title': ev['title'], 'time': event_dt.strftime("%H:%M"), 'impact': ev['impact'], 'actual': st.session_state.manual_overrides.get(ev['title'], ev['actual']), 'forecast': ev['forecast'], 'direction': ev.get('direction', ''), 'dt': event_dt, 'time_diff_hours': time_diff_hours})
+    except Exception as e: print("Firebase Error:", e)
+    
     try:
         h_gcf = yf.Ticker("GC=F").history(period="5d", interval="15m")
         if not h_gcf.empty and len(h_gcf) >= 2: metrics['GC_F'] = (h_gcf['Close'].iloc[-1], ((h_gcf['Close'].iloc[-1]-h_gcf['Close'].iloc[-2])/h_gcf['Close'].iloc[-2])*100)
@@ -155,12 +154,7 @@ def get_forexfactory_usd():
                 thai_dt = gmt_dt + datetime.timedelta(hours=7)
                 time_diff_hours = (thai_dt - now_thai).total_seconds() / 3600
                 if time_diff_hours < -12.0 or (impact == 'High' and time_diff_hours > 24): continue
-                ff_news.append({
-                    'source': 'FF', 'title': title, 'time': thai_dt.strftime("%H:%M"), 
-                    'impact': impact, 'actual': st.session_state.manual_overrides.get(title, event.find('actual').text if event.find('actual') is not None else "Pending"), 
-                    'forecast': event.find('forecast').text if event.find('forecast') is not None else "", 
-                    'direction': '', 'dt': thai_dt, 'time_diff_hours': time_diff_hours
-                })
+                ff_news.append({'source': 'FF', 'title': title, 'time': thai_dt.strftime("%H:%M"), 'impact': impact, 'actual': st.session_state.manual_overrides.get(title, event.find('actual').text if event.find('actual') is not None else "Pending"), 'forecast': event.find('forecast').text if event.find('forecast') is not None else "", 'direction': '', 'dt': thai_dt, 'time_diff_hours': time_diff_hours})
         return ff_news
     except: return []
 
@@ -240,92 +234,107 @@ def get_breaking_news():
     speed_news.sort(key=lambda x: x['timestamp'], reverse=True)
     return speed_news[:10]
 
-# 💡 V12.18: ฟังก์ชันอัปเกรดคำนวณเทรนด์ให้แม่นยำขึ้น (Price vs EMA12 vs EMA50)
+# 🛡️ V12.19: ฟังก์ชันวิเคราะห์เทรนด์ (Safe Mode ไร้ Error)
 def identify_trend(df):
-    if df is None or len(df) < 50: return "ไซด์เวย์ ⚪", "SIDEWAY"
-    df['ema12'] = ta.ema(df['close'], length=12)
-    df['ema50'] = ta.ema(df['close'], length=50)
-    c = df.iloc[-1]
-    
-    if c['close'] > c['ema50'] and c['ema12'] > c['ema50']:
-        return "ขาขึ้น 🟢", "UP"
-    elif c['close'] < c['ema50'] and c['ema12'] < c['ema50']:
-        return "ขาลง 🔴", "DOWN"
+    if df is None or df.empty or len(df) < 50: return "ไซด์เวย์ ⚪", "SIDEWAY"
+    try:
+        ema12 = ta.ema(df['close'], length=12)
+        ema50 = ta.ema(df['close'], length=50)
+        if ema12 is not None and ema50 is not None and not ema12.empty and not ema50.empty:
+            curr_close = float(df['close'].iloc[-1])
+            curr_ema12 = float(ema12.iloc[-1])
+            curr_ema50 = float(ema50.iloc[-1])
+            if pd.notna(curr_ema12) and pd.notna(curr_ema50):
+                if curr_close > curr_ema50 and curr_ema12 > curr_ema50: return "ขาขึ้น 🟢", "UP"
+                elif curr_close < curr_ema50 and curr_ema12 < curr_ema50: return "ขาลง 🔴", "DOWN"
+    except Exception as e: print("Identify Trend Error:", e)
     return "ไซด์เวย์ ⚪", "SIDEWAY"
 
-# 💡 V12.18: ฟังก์ชันหาโซนสำคัญของ H4 (HTF Zones)
 def get_h4_zones(df_h4):
     demand_h4, supply_h4 = [], []
     if df_h4 is None or len(df_h4) < 20: return demand_h4, supply_h4
     df_recent = df_h4.tail(60).reset_index(drop=True)
     for i in range(len(df_recent)-1, 1, -1):
-        if df_recent['low'].iloc[i] > df_recent['high'].iloc[i-2]: # Demand
-            demand_h4.append((df_recent['high'].iloc[i-2], df_recent['low'].iloc[i]))
-        if df_recent['high'].iloc[i] < df_recent['low'].iloc[i-2]: # Supply
-            supply_h4.append((df_recent['low'].iloc[i-2], df_recent['high'].iloc[i]))
+        try:
+            if float(df_recent['low'].iloc[i]) > float(df_recent['high'].iloc[i-2]): 
+                demand_h4.append((float(df_recent['high'].iloc[i-2]), float(df_recent['low'].iloc[i])))
+            if float(df_recent['high'].iloc[i]) < float(df_recent['low'].iloc[i-2]): 
+                supply_h4.append((float(df_recent['low'].iloc[i-2]), float(df_recent['high'].iloc[i])))
+        except: continue
     return demand_h4, supply_h4
 
-# --- 4. CORE AI (V12.18 SMC Master) ---
-def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir):
-    if is_market_closed: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, False
-        
-    df_m15['atr'] = ta.atr(df_m15['high'], df_m15['low'], df_m15['close'], length=14)
-    # ตัดการคำนวณ RSI ออกไปคำนวณด้านนอก เพื่อแก้บั๊ก KeyError
-    macd = ta.macd(df_m15['close'], fast=12, slow=26, signal=9)
-    df_m15 = pd.concat([df_m15, macd], axis=1)
+def detect_choch_and_sweep(df):
+    recent = df.tail(20).reset_index(drop=True)
+    if len(recent) < 20: return False, "", 0, 0
+    lowest_low, highest_high = recent['low'].iloc[0:15].min(), recent['high'].iloc[0:15].max()
+    current_close = recent['close'].iloc[-1]
+    if recent['low'].iloc[-5:-1].min() < lowest_low and current_close > recent['high'].iloc[-5:-1].max(): return True, "BUY", recent['low'].iloc[-5:-1].min(), current_close
+    if recent['high'].iloc[-5:-1].max() > highest_high and current_close < recent['low'].iloc[-5:-1].min(): return True, "SELL", recent['high'].iloc[-5:-1].max(), current_close
+    return False, "", 0, 0
 
-    atr = float(df_m15.iloc[-2]['atr'])
-    macd_hist = float(df_m15['MACDh_12_26_9'].iloc[-1]) if 'MACDh_12_26_9' in df_m15 else 0.0
-    current_m15 = df_m15.iloc[-1]
-    red_body_size = current_m15['open'] - current_m15['close']
+# --- 4. CORE AI (V12.19 SMC Master) ---
+def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir):
+    if is_market_closed or df_m15 is None or len(df_m15) < 50: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, False
     
-    # 💡 ปรับ Anti-dump เป็น $30
-    is_flash_crash = True if (red_body_size >= 30.0) and ((current_m15['close'] - current_m15['low']) <= 5.0) else False
+    atr_val = 5.0
+    try: # 🛡️ ป้องกัน Error จากอินดิเคเตอร์
+        atr_series = ta.atr(df_m15['high'], df_m15['low'], df_m15['close'], length=14)
+        if atr_series is not None and not atr_series.empty: atr_val = float(atr_series.iloc[-2])
+    except: pass
+    
+    macd_hist = 0.0
+    try:
+        macd_series = ta.macd(df_m15['close'], fast=12, slow=26, signal=9)
+        if macd_series is not None and not macd_series.empty: macd_hist = float(macd_series.iloc[-1, 1]) # Column MACDh
+    except: pass
+
+    current_m15 = df_m15.iloc[-1]
+    red_body_size = float(current_m15['open']) - float(current_m15['close'])
+    is_flash_crash = True if (red_body_size >= 30.0) and ((float(current_m15['close']) - float(current_m15['low'])) <= 5.0) else False
 
     h4_demands, h4_supplies = get_h4_zones(df_h4)
 
     def get_smc_setup(df, trend_dir):
         df_recent = df.tail(40).reset_index(drop=True)
-        atr_smc = df_recent['atr'].iloc[-1]
-        current_close = df.iloc[-1]['close']
+        current_close = float(df.iloc[-1]['close'])
         mtf_aligned = False
         
         if trend_dir == "UP": 
             for i in range(len(df_recent)-1, 1, -1):
-                if df_recent['low'].iloc[i] > df_recent['high'].iloc[i-2]: 
-                    entry_top = df_recent['low'].iloc[i]
-                    entry_bot = df_recent['high'].iloc[i-2]
-                    sl_val = entry_bot - (atr_smc * 0.5)
-                    tp_val = df_recent['high'].max()
-                    
-                    # 💡 ตรวจสอบว่าโซน FVG ของ M15 ซ้อนทับกับ Demand H4 หรือไม่
-                    for h4_bot, h4_top in h4_demands:
-                        if max(entry_bot, h4_bot) <= min(entry_top, h4_top):
-                            mtf_aligned = True
-                            break
-                            
-                    # ตรวจสอบราคาย่อ (Pullback)
-                    if current_close > entry_top and (current_close - entry_top) < (atr_smc * 2):
-                        return True, f"🧲 โซน Demand FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned
+                try:
+                    if float(df_recent['low'].iloc[i]) > float(df_recent['high'].iloc[i-2]): 
+                        entry_top = float(df_recent['low'].iloc[i])
+                        entry_bot = float(df_recent['high'].iloc[i-2])
+                        sl_val = entry_bot - (atr_val * 0.5)
+                        tp_val = float(df_recent['high'].max())
+                        
+                        for h4_bot, h4_top in h4_demands:
+                            if max(entry_bot, h4_bot) <= min(entry_top, h4_top):
+                                mtf_aligned = True; break
+                                
+                        if current_close > entry_top and (current_close - entry_top) < (atr_val * 2):
+                            return True, f"🧲 โซน Demand FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned
+                except: continue
         elif trend_dir == "DOWN": 
             for i in range(len(df_recent)-1, 1, -1):
-                if df_recent['high'].iloc[i] < df_recent['low'].iloc[i-2]: 
-                    entry_bot = df_recent['high'].iloc[i]
-                    entry_top = df_recent['low'].iloc[i-2]
-                    sl_val = entry_top + (atr_smc * 0.5)
-                    tp_val = df_recent['low'].min()
-                    
-                    # 💡 ตรวจสอบว่าโซน FVG ของ M15 ซ้อนทับกับ Supply H4 หรือไม่
-                    for h4_bot, h4_top in h4_supplies:
-                        if max(entry_bot, h4_bot) <= min(entry_top, h4_top):
-                            mtf_aligned = True
-                            break
-                            
-                    if current_close < entry_bot and (entry_bot - current_close) < (atr_smc * 2):
-                        return True, f"🧲 โซน Supply FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned
+                try:
+                    if float(df_recent['high'].iloc[i]) < float(df_recent['low'].iloc[i-2]): 
+                        entry_bot = float(df_recent['high'].iloc[i])
+                        entry_top = float(df_recent['low'].iloc[i-2])
+                        sl_val = entry_top + (atr_val * 0.5)
+                        tp_val = float(df_recent['low'].min())
+                        
+                        for h4_bot, h4_top in h4_supplies:
+                            if max(entry_bot, h4_bot) <= min(entry_top, h4_top):
+                                mtf_aligned = True; break
+                                
+                        if current_close < entry_bot and (entry_bot - current_close) < (atr_val * 2):
+                            return True, f"🧲 โซน Supply FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned
+                except: continue
         return False, "", "", "", False
 
     smc_found, smc_entry, smc_sl, smc_tp, is_mtf_aligned = get_smc_setup(df_m15, trend_m15_dir)
+    found_sweep, sweep_dir, sweep_price, _ = detect_choch_and_sweep(df_m15)
     
     news_warning = ""
     is_news_danger = False
@@ -338,14 +347,13 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
             news_warning = f"\n⚠️ **WARNING (ลดความเสี่ยง):** ข่าว '{next_red_news['title']}' จะออกใน {hrs:.1f} ชม."
 
     if is_flash_crash:
-        setup = {'Entry': f"กด Sell ทันที หรือรอเด้งโซน $ {(current_m15['close'] + (0.5*atr)):.2f}", 'SL': f"$ {(current_m15['open'] + (0.5*atr)):.2f}", 'TP': f"$ {(current_m15['close'] - (3*atr)):.2f}"}
+        setup = {'Entry': f"กด Sell ทันที หรือรอเด้งโซน $ {(float(current_m15['close']) + (0.5*atr_val)):.2f}", 'SL': f"$ {(float(current_m15['open']) + (0.5*atr_val)):.2f}", 'TP': f"$ {(float(current_m15['close']) - (3*atr_val)):.2f}"}
         return "🚨 FLASH CRASH (SELL NOW!)", f"เกิดแรงเทขายผิดปกติระดับ 30$ สั่งแทง SELL ตามน้ำ!{news_warning}", setup, True
 
     if is_news_danger: return "WAIT (News Danger 🛑)", f"ระบบระงับการเข้าเทรดเพื่อหลีกเลี่ยงความผันผวนของข่าว{news_warning}", {}, False
     if not smc_found: return "WAIT", f"ยังไม่พบโซนย่อตัว (Pullback/FVG) ใน M15 รอราคาสร้างฐาน{news_warning}", {}, False
     
-    # --- ⭐ ระบบประเมิน 5 ดาว (Quant Matrix) ---
-    stars = 2 # ให้ 2 ดาวเป็นฐาน เพราะเจอ FVG
+    stars = 2 
     logic_details = [f"⭐ M15 พบจุดเข้า Buy on Dip / Sell on Rally (FVG)"]
     
     if trend_m15_dir == trend_h4_dir:
@@ -367,10 +375,7 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
     star_str = "⭐" * stars
     logic_str = "<br>".join(logic_details) + news_warning
 
-    # ดึงค่า temp rsi ที่คำนวณไว้ด้านนอกมาใช้ชั่วคราว
-    rsi_val = 50.0
-    if 'rsi' in st.session_state: rsi_val = st.session_state.rsi
-
+    rsi_val = st.session_state.get('rsi', 50.0)
     if trend_m15_dir == "UP":
         if rsi_val > 70: return f"WAIT (Overbought)", f"RSI = {rsi_val:.1f} เข้าเขต Overbought ห้ามไล่ราคา! รอราคาย่อลงมาในโซน{news_warning}", {}, False
         setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
@@ -383,17 +388,8 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
 
     return "WAIT", "รอ...", {}, False
 
-def detect_choch_and_sweep(df):
-    recent = df.tail(20).reset_index(drop=True)
-    if len(recent) < 20: return False, "", 0, 0
-    lowest_low, highest_high = recent['low'].iloc[0:15].min(), recent['high'].iloc[0:15].max()
-    current_close = recent['close'].iloc[-1]
-    if recent['low'].iloc[-5:-1].min() < lowest_low and current_close > recent['high'].iloc[-5:-1].max(): return True, "BUY", recent['low'].iloc[-5:-1].min(), current_close
-    if recent['high'].iloc[-5:-1].max() > highest_high and current_close < recent['low'].iloc[-5:-1].min(): return True, "SELL", recent['high'].iloc[-5:-1].max(), current_close
-    return False, "", 0, 0
-
 def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed):
-    if is_market_closed: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, "🔴"
+    if is_market_closed or df_m15 is None: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, "🔴"
     light = "🔴"
     if next_red_news:
         hrs = next_red_news['hours']
@@ -423,15 +419,10 @@ def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_
     return "WAIT", "รอ...", {}, light
 
 def get_ea_commander_status(trend_m15_str, trend_h4_str, is_flash_crash, rsi):
-    if is_flash_crash:
-        return "🚨 HARD CUT (ปิด EA ทันที!)", "ตรวจพบความผันผวนรุนแรง (High Variance) ปิด EA เพื่อรักษาเงินทุน ห้ามถัวเด็ดขาด!", "#ff3333"
-    if rsi > 75 or rsi < 25:
-        return "⚠️ PAUSE EA (ห้ามเปิดออเดอร์ใหม่)", "RSI เข้าเขตสุดโต่ง โอกาสโดนลากสูง พัก EA รอราคาเข้าโซนสมดุล", "#ffcc00"
-    if trend_m15_str == "ไซด์เวย์ ⚪" and trend_h4_str == "ไซด์เวย์ ⚪":
-        return "🟡 LOW RISK MODE (รันไซด์เวย์)", "ตลาดสะสมพลัง (Low Volatility) เหมาะกับการรัน Grid เก็บกรอบแคบ", "#f0b90b"
-    if trend_m15_str != trend_h4_str:
-        return "🟡 CAUTION (ลดความเสี่ยง)", "ไทม์เฟรมใหญ่และเล็กขัดแย้งกัน แนะนำปรับลดขนาด Lot Size ของ EA", "#ffcc00"
-    
+    if is_flash_crash: return "🚨 HARD CUT (ปิด EA ทันที!)", "ตรวจพบความผันผวนรุนแรง (High Variance) ปิด EA เพื่อรักษาเงินทุน ห้ามถัวเด็ดขาด!", "#ff3333"
+    if rsi > 75 or rsi < 25: return "⚠️ PAUSE EA (ห้ามเปิดออเดอร์ใหม่)", "RSI เข้าเขตสุดโต่ง โอกาสโดนลากสูง พัก EA รอราคาเข้าโซนสมดุล", "#ffcc00"
+    if trend_m15_str == "ไซด์เวย์ ⚪" and trend_h4_str == "ไซด์เวย์ ⚪": return "🟡 LOW RISK MODE (รันไซด์เวย์)", "ตลาดสะสมพลัง (Low Volatility) เหมาะกับการรัน Grid เก็บกรอบแคบ", "#f0b90b"
+    if trend_m15_str != trend_h4_str: return "🟡 CAUTION (ลดความเสี่ยง)", "ไทม์เฟรมใหญ่และเล็กขัดแย้งกัน แนะนำปรับลดขนาด Lot Size ของ EA", "#ffcc00"
     return "🟢 TREND FOLLOWING (FULL GRID)", f"โครงสร้าง H4 และ M15 สอดคล้องกัน ({trend_m15_str}) กาง Grid ดักตามเทรนด์ได้เต็มกำลัง", "#00ff00"
 
 def calculate_ev_stats(entry_str, sl_str, tp_str, stars):
@@ -488,28 +479,17 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
 
         requests.post(GOOGLE_SHEET_API_URL, json=payload, timeout=3)
         st.session_state.pending_trades.append(internal_trade)
-        
-        img_path = "setup_chart.png"
-        fig = plot_setup_chart(df_m15, setup_data, mode="All-In" if "All-In" in setup_type else "Normal")
-        if fig:
-            try: 
-                fig.write_image(img_path)
-                time.sleep(1) 
-            except Exception as img_e: 
-                img_path = None
 
         tg_msg = f"🎯 [NEW SETUP] แจ้งเตือนจุดเข้า!\n⏰ เวลาออก Setup: {thai_dt_str}\n\nMode: {setup_type}\nSignal: {sig}\n\n📍 Entry: {entry_str}\n"
-        if risk > 0:
-            tg_msg += f"🛑 SL: {sl_str} (Risk = ${risk:.2f})\n💰 TP: {tp_str} (Reward = ${reward:.2f})\n🧮 Risk:Reward: 1:{rr:.2f}\n\n"
-        else:
-            tg_msg += f"🛑 SL: {sl_str}\n💰 TP: {tp_str}\n\n"
+        if risk > 0: tg_msg += f"🛑 SL: {sl_str} (Risk = ${risk:.2f})\n💰 TP: {tp_str} (Reward = ${reward:.2f})\n🧮 Risk:Reward: 1:{rr:.2f}\n\n"
+        else: tg_msg += f"🛑 SL: {sl_str}\n💰 TP: {tp_str}\n\n"
             
         tg_msg += f"❓ Why?:\n- {clean_reason}\n\n"
         if risk > 0:
             ev_status = "Positive EV คุ้มค่าที่จะเสี่ยง! ✅" if ev_r > 0 else "Negative EV ความเสี่ยงสูง ⚠️"
             tg_msg += f"🎲 Implied Win Rate: {int(wr_pct)}% (ระดับ {stars_count} ดาว)\n📈 Expected Value (EV): {ev_r:+.2f} R ({ev_status})"
 
-        send_telegram_notify(tg_msg, img_path)
+        send_telegram_notify(tg_msg)
     except Exception as e: print("Log Error:", e)
 
 def check_pending_trades(current_high, current_low):
@@ -560,26 +540,6 @@ def generate_telegram_us_briefing(trend_h4_str, trend_m15_str, metrics, sentimen
     msg = f"🗽🇺🇸 US Session Briefing 🇺🇸🗽\nประจำวันที่: {now_thai.strftime('%d %b %Y | 19:30 น.')}\n\n📊 [Technical]\nTrend H4: {trend_h4_str}\nTrend M15 (ล่าสุด): {trend_m15_str}\nXAUUSD: ${metrics['GOLD'][0]:.2f}\n\n💵 [Macro / 5 Pillars]\nDXY: {metrics['DXY'][0]:.2f} ({dxy_status})\nUS10Y: {metrics['US10Y'][0]:.2f}% ({us10y_status})\nGC=F (Premium): {gcf_status}\nSPDR Fund: {spdr_val}\n\n🐑 [Retail Sentiment]\nS:{sentiment.get('short',50)}% / L:{sentiment.get('long',50)}% ({senti_status})\n\n📅 [US Economic News Tonight]\n{today_news_str}\n⚠️ [Geo-Politics]\n{geo_str}\n\n🤖 AI Prediction: โฟกัสจุดเข้าตามเทรนด์ M15 และคุม Position Size ตามหลัก Positive EV"
     return msg
 
-def plot_setup_chart(df, setup_dict, mode="Normal"):
-    if df is None or df.empty or not setup_dict: return None
-    df_plot = df.tail(100).copy()
-    df_plot['datetime'] = pd.to_datetime(df_plot['time'], unit='s')
-    fig = go.Figure(data=[go.Candlestick(x=df_plot['datetime'], open=df_plot['open'], high=df_plot['high'], low=df_plot['low'], close=df_plot['close'], increasing_line_color='#00ff00', decreasing_line_color='#ff3333')])
-    def get_prices(t): return [float(x) for x in re.findall(r'\d+\.\d+', str(t).replace(',', ''))]
-    sl, tp, entry, sweep = get_prices(setup_dict.get('SL', '')), get_prices(setup_dict.get('TP', '')), get_prices(setup_dict.get('Entry', '')), get_prices(setup_dict.get('Sweep', '')) 
-    entry_text = str(setup_dict.get('Entry', ''))
-    label_text = "🎯 Entry Zone" if "โซน" in entry_text else "🎯 Entry"
-    line_color = "#ffcc00" if mode == "All-In" else "#00ccff"
-    
-    if sl: fig.add_hline(y=sl[0], line_dash="dash", line_color="#ff4444", annotation_text="🛑 SL", annotation_position="bottom right", annotation_font_color="#ff4444")
-    if tp: fig.add_hline(y=tp[0], line_dash="dash", line_color="#00ff00", annotation_text="💰 TP", annotation_position="top right", annotation_font_color="#00ff00")
-    if sweep: fig.add_hline(y=sweep[0], line_dash="dot", line_color="#ff00ff", annotation_text="⚡ CHoCH / Sweep", annotation_position="left", annotation_font_color="#ff00ff")
-    if entry:
-        if len(entry) >= 2: fig.add_hrect(y0=min(entry), y1=max(entry), fillcolor=f"rgba({'255, 204, 0' if mode=='All-In' else '0, 204, 255'}, 0.2)", line_width=1, annotation_text=label_text, annotation_position="top right")
-        else: fig.add_hline(y=entry[0], line_dash="dash", line_color=line_color, annotation_text=label_text, annotation_position="top right", annotation_font_color=line_color)
-    fig.update_layout(template='plotly_dark', margin=dict(l=10, r=50, t=10, b=10), height=350, xaxis_rangeslider_visible=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-    return fig
-
 def get_setup_time_html(setup_type, current_sig, base_color):
     hist = st.session_state.log_history.get(setup_type)
     if hist and hist['signal'] == current_sig:
@@ -606,17 +566,20 @@ speed_news = get_breaking_news()
 
 if not is_market_closed and df_m15 is not None: check_pending_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
-# 💡 V12.18: ใช้ฟังก์ชันวิเคราะห์เทรนด์ใหม่
+# 💡 V12.19: วิเคราะห์เทรนด์แบบไร้ Error
 trend_h4_str, trend_h4_dir = identify_trend(df_h4)
 trend_m15_str, trend_m15_dir = identify_trend(df_m15)
 
-# 🛠️ แก้บั๊ก KeyError: 'rsi' (สั่งให้คำนวณ RSI ก่อนดึงค่า)
+# 💡 V12.19: คำนวณ RSI ปลอดภัย 100%
 current_rsi = 50.0
-if df_m15 is not None and len(df_m15) > 15:
-    temp_rsi = ta.rsi(df_m15['close'], length=14)
-    if temp_rsi is not None and not temp_rsi.empty:
-        current_rsi = float(temp_rsi.iloc[-1])
-        st.session_state.rsi = current_rsi # เก็บค่า RSI ลง Session ไว้ใช้ในฟังก์ชัน
+try:
+    if df_m15 is not None and len(df_m15) > 15:
+        temp_rsi = ta.rsi(df_m15['close'], length=14)
+        if temp_rsi is not None and not temp_rsi.empty:
+            val = float(temp_rsi.iloc[-1])
+            if pd.notna(val): current_rsi = val
+except: pass
+st.session_state.rsi = current_rsi 
 
 sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir)
 sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed)
@@ -699,8 +662,6 @@ with col_allin:
     if setup_allin:
         st.markdown(f"""<div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid #444; margin-top: 15px;"><div style="color:#ffcc00; font-weight:bold; margin-bottom:5px;">🎯 1:2 Geometry Setup:</div><div>📍 <b>Entry:</b> {setup_allin['Entry']}</div><div style="color:#ff4444;">🛑 <b>SL:</b> {setup_allin['SL']}</div><div style="color:#00ff00;">💰 <b>TP:</b> {setup_allin['TP']}</div></div>""", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
-    if setup_allin and not is_market_closed and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_allin, mode="All-In"), use_container_width=True)
-    else: st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #ff3333; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังรอพายุสภาพคล่อง...</div>", unsafe_allow_html=True)
 
 with col_normal:
     st.markdown("<h2 class='title-header' style='color: #00ccff;'>⭐ 5-Star Trade Matrix</h2>", unsafe_allow_html=True)
@@ -719,8 +680,6 @@ with col_normal:
     if setup_norm:
         st.markdown(f"""<div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid #444; margin-top: 15px;"><div style="color:#00ccff; font-weight:bold; margin-bottom:5px;">🎯 Dynamic Zones:</div><div>📍 <b>Entry:</b> {setup_norm['Entry']}</div><div style="color:#ff4444;">🛑 <b>SL:</b> {setup_norm['SL']}</div><div style="color:#00ff00;">💰 <b>TP:</b> {setup_norm['TP']}</div></div>""", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
-    if setup_norm and not is_market_closed and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_norm, mode="Normal"), use_container_width=True)
-    else: st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #00ccff; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังคำนวณ Probability Matrix...</div>", unsafe_allow_html=True)
 
 st.write("---")
 
@@ -754,7 +713,6 @@ else:
     with tab_chart_dxy: st.components.v1.html(get_tv_html("CAPITALCOM:DXY", 400), height=400)
     display_intelligence()
 
-# --- 9. TELEGRAM INTERACTIVE LISTENER (MENTION HANDLER) ---
 def handle_telegram_mentions(metrics, df_h4, df_m15, sentiment, final_news_list, war_news, setup_norm, trend_h4_str, trend_m15_str, spdr_val):
     last_update_id = st.session_state.get('last_tg_update_id', 0)
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
