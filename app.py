@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.23", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.24", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -126,7 +126,6 @@ def get_current_session():
     if h >= 19 or h < 4: return "🗽 US/New York Session"
     return "🌙 Market Transition"
 
-# --- 3. FOREXFACTORY & SCRAPERS ---
 @st.cache_data(ttl=900)
 def fetch_ff_xml():
     try: return requests.get("https://nfs.faireconomy.media/ff_calendar_thisweek.xml", headers={'User-Agent': 'Mozilla/5.0'}, timeout=10).content
@@ -257,6 +256,43 @@ def get_h4_zones(df_h4):
         except: continue
     return demand_h4, supply_h4
 
+# 💡 V12.24: ระบบสแกนแท่งเทียนกลับตัว (Candlestick Reversal Scanner)
+def detect_candlestick_reversal(df, direction):
+    if len(df) < 3: return False, ""
+    c1 = df.iloc[-1] # แท่งปัจจุบัน (อาจจะยังไม่ปิด)
+    c2 = df.iloc[-2] # แท่งก่อนหน้า (ปิดแล้ว)
+
+    def get_props(c):
+        body = abs(c['open'] - c['close'])
+        high, low = c['high'], c['low']
+        uw = high - max(c['open'], c['close']) # Upper Wick
+        lw = min(c['open'], c['close']) - low  # Lower Wick
+        is_green = c['close'] > c['open']
+        is_red = c['close'] < c['open']
+        return body, uw, lw, is_green, is_red
+
+    b1, uw1, lw1, g1, r1 = get_props(c1)
+    b2, uw2, lw2, g2, r2 = get_props(c2)
+
+    if direction == "UP": # หาจุดกลับตัวเป็นขาขึ้น (ดัก Buy)
+        if r2 and g1 and c1['close'] > c2['open'] and c1['open'] <= c2['close']: 
+            return True, "Bullish Engulfing (กลืนกินขาขึ้น)"
+        if lw1 > (b1 * 2) and uw1 < b1 and lw1 > 1.0: 
+            return True, "Bullish Pinbar / Hammer (หางยาวแทงลง)"
+        # เช็คแท่งก่อนหน้าเผื่อมันเพิ่งปิดไป
+        if lw2 > (b2 * 2) and uw2 < b2 and lw2 > 1.0 and g1: 
+            return True, "Confirmed Hammer (แฮมเมอร์ยืนยัน)"
+            
+    elif direction == "DOWN": # หาจุดกลับตัวเป็นขาลง (ดัก Sell)
+        if g2 and r1 and c1['close'] < c2['open'] and c1['open'] >= c2['close']: 
+            return True, "Bearish Engulfing (กลืนกินขาลง)"
+        if uw1 > (b1 * 2) and lw1 < b1 and uw1 > 1.0: 
+            return True, "Bearish Pinbar / Shooting Star (หางยาวแทงขึ้น)"
+        if uw2 > (b2 * 2) and lw2 < b2 and uw2 > 1.0 and r1: 
+            return True, "Confirmed Shooting Star (ชูตติ้งสตาร์ยืนยัน)"
+            
+    return False, ""
+
 def detect_choch_and_sweep(df):
     recent = df.tail(20).reset_index(drop=True)
     if len(recent) < 20: return False, "", 0, 0
@@ -314,9 +350,9 @@ def check_active_trades(current_high, current_low):
                     
                 tg_msg += f"⚡ **Result: {result}**"
                 send_telegram_notify(tg_msg)
-                memory[mode] = None # เคลียร์สมองเมื่อเทรดจบ
+                memory[mode] = None 
 
-# --- 4. CORE AI ---
+# --- 4. CORE AI (V12.24) ---
 def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir):
     if is_market_closed or df_m15 is None or len(df_m15) < 50: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, False
     
@@ -337,6 +373,9 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
         current_close = float(df.iloc[-1]['close'])
         mtf_aligned = False
         
+        # 💡 เช็คแท่งเทียนกลับตัวในโซน FVG
+        has_candle, candle_name = detect_candlestick_reversal(df, trend_dir)
+        
         if trend_dir == "UP": 
             for i in range(len(df_recent)-1, 1, -1):
                 try:
@@ -349,7 +388,7 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
                             if max(entry_bot, h4_bot) <= min(entry_top, h4_top):
                                 mtf_aligned = True; break
                         if current_close > entry_top and (current_close - entry_top) < (atr_val * 2):
-                            return True, f"🧲 โซน Demand FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned
+                            return True, f"🧲 โซน Demand FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned, has_candle, candle_name
                 except: continue
         elif trend_dir == "DOWN": 
             for i in range(len(df_recent)-1, 1, -1):
@@ -363,11 +402,11 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
                             if max(entry_bot, h4_bot) <= min(entry_top, h4_top):
                                 mtf_aligned = True; break
                         if current_close < entry_bot and (entry_bot - current_close) < (atr_val * 2):
-                            return True, f"🧲 โซน Supply FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned
+                            return True, f"🧲 โซน Supply FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned, has_candle, candle_name
                 except: continue
-        return False, "", "", "", False
+        return False, "", "", "", False, False, ""
 
-    smc_found, smc_entry, smc_sl, smc_tp, is_mtf_aligned = get_smc_setup(df_m15, trend_m15_dir)
+    smc_found, smc_entry, smc_sl, smc_tp, is_mtf_aligned, has_candle, candle_name = get_smc_setup(df_m15, trend_m15_dir)
     
     news_warning = ""
     is_news_danger = False
@@ -400,9 +439,12 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
     if (trend_m15_dir == "UP" and dxy_trend < 0) or (trend_m15_dir == "DOWN" and dxy_trend > 0):
         stars += 1; logic_details.append("⭐ ดัชนี DXY เคลื่อนไหวสนับสนุนทิศทางทองคำ")
 
-    retail_short, retail_long = sentiment.get('short', 50), sentiment.get('long', 50)
-    if (trend_m15_dir == "UP" and retail_short > 60) or (trend_m15_dir == "DOWN" and retail_long > 60):
-        stars += 1; logic_details.append("⭐ รายย่อยเทน้ำหนักฝั่งตรงข้าม (เทรดล่าสภาพคล่อง)")
+    # 💡 เพิ่มดาวถ้าเจอแท่งเทียนกลับตัว
+    if has_candle:
+        stars += 1
+        logic_details.append(f"🔥 Price Action: พบแท่งเทียน '{candle_name}' ยืนยันในโซน")
+    else:
+        logic_details.append(f"⏳ Price Action: ราคายังไม่ทำรูปแบบแท่งเทียนกลับตัว (ควรระวังโซนทะลุ)")
 
     stars = min(5, stars)
     star_str = "⭐" * stars
@@ -433,6 +475,11 @@ def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_
         
     found_sweep, direction, sweep_price, current_price = detect_choch_and_sweep(df_m15)
     if not found_sweep: return "WAIT", "🟢 ข่าวออกแล้ว แต่ยังไม่พบโครงสร้าง Liquidity Sweep", {}, "🟢"
+    
+    # 💡 All-In บังคับต้องมี Price Action ยืนยัน
+    has_candle, candle_name = detect_candlestick_reversal(df_m15, direction)
+    if not has_candle: 
+        return "WAIT", f"🟢 เกิดโครงสร้าง CHoCH แล้ว รอแท่งเทียนกลับตัว (Price Action) คอนเฟิร์มจุดเข้า", {}, "🟢"
         
     dxy_trend, gcf_trend = metrics['DXY'][1], metrics['GC_F'][1]
     if direction == "BUY":
@@ -440,14 +487,14 @@ def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_
         if gcf_trend < 0: return "WAIT", "GC=F Premium ไม่สนับสนุนทิศทาง", {}, "🟢"
         if sentiment['short'] < 75.0: return "WAIT", f"รายย่อยยังสะสมฝั่ง Short ไม่พอ ({sentiment['short']}%)", {}, "🟢"
         entry, sl = current_price - 1.0, max(sweep_price - 0.5, current_price - 4.0)
-        return "ALL-IN BUY 🚀", f"Confluence ครบ 100% เกิด CHoCH ดักรอเข้าซื้อ", {'Entry': f"🎯 โซน $ {(entry-1.0):.2f} - $ {entry:.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry + ((entry - sl) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
+        return "ALL-IN BUY 🚀", f"Confluence ครบ 100% + พบแท่งเทียน '{candle_name}' ยืนยัน", {'Entry': f"🎯 โซน $ {(entry-1.0):.2f} - $ {entry:.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry + ((entry - sl) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
         
     elif direction == "SELL":
         if dxy_trend < 0: return "WAIT", "DXY ยังอ่อนค่า (ขัดแย้งกับสัญญาณ)", {}, "🟢"
         if gcf_trend > 0: return "WAIT", "GC=F Premium ไม่สนับสนุนทิศทาง", {}, "🟢"
         if sentiment['long'] < 75.0: return "WAIT", f"รายย่อยยังสะสมฝั่ง Buy ไม่พอ ({sentiment['long']}%)", {}, "🟢"
         entry, sl = current_price + 1.0, min(sweep_price + 0.5, current_price + 4.0)
-        return "ALL-IN SELL 🚀", f"Confluence ครบ 100% เกิด CHoCH ดักรอเทขาย", {'Entry': f"🎯 โซน $ {entry:.2f} - $ {(entry+1.0):.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry - ((sl - entry) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
+        return "ALL-IN SELL 🚀", f"Confluence ครบ 100% + พบแท่งเทียน '{candle_name}' ยืนยัน", {'Entry': f"🎯 โซน $ {entry:.2f} - $ {(entry+1.0):.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry - ((sl - entry) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
 
     return "WAIT", "รอ...", {}, light
 
@@ -503,7 +550,6 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
         tp_val = extract_price(tp_str, False, False)
         is_market = "NOW" in sig 
 
-        # 🧠 บันทึก Trade ลงใน RAM เพื่อ Tracking
         trade_dict = {
             "id": trade_id,
             "signal": sig,
@@ -598,7 +644,6 @@ sentiment = get_retail_sentiment()
 pol_news, war_news = get_categorized_news() 
 speed_news = get_breaking_news()
 
-# 🧠 ระบบตรวจสอบออเดอร์ค้าง (Tracking System)
 if not is_market_closed and df_m15 is not None: 
     check_active_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
@@ -615,7 +660,6 @@ try:
 except: pass
 st.session_state.rsi = current_rsi 
 
-# 🧠 ดึงความจำเพื่อเช็คว่ามีออเดอร์ค้างไหม
 memory = get_trade_memory()
 
 # --- โหมด Normal Setup ---
@@ -623,7 +667,6 @@ sig_norm_raw, reason_norm_raw, setup_norm_raw, is_flash_crash = calculate_normal
 time_html_norm = ""
 
 if memory["Normal Setup"] is not None:
-    # 💡 ถ้ามีออเดอร์ค้าง ให้ "โหลดข้อมูลเดิมกลับมาโชว์"
     active_trade = memory["Normal Setup"]
     sig_norm = f"⏳ TRACKING: {active_trade['signal']}"
     reason_norm = f"<b>[สถานะ: กำลังรันออเดอร์ รอชน TP/SL]</b><br>{active_trade['display_reason'].replace('- ', '• ')}"
@@ -631,11 +674,9 @@ if memory["Normal Setup"] is not None:
     elapsed_mins = int((time.time() - active_trade["timestamp_sec"]) / 60)
     time_html_norm = f"<div style='font-size:13px; color:#00ccff; margin-top:8px; padding-top:8px; border-top:1px dashed #444;'>🕒 <b>เวลาออก Setup:</b> {active_trade['display_time']} (ผ่านมา {elapsed_mins} นาที)</div>"
 else:
-    # 💡 ถ้าไม่มีออเดอร์ค้าง ให้ประเมินสถานการณ์ใหม่
     sig_norm, reason_norm, setup_norm = sig_norm_raw, reason_norm_raw, setup_norm_raw
     if "WAIT" not in sig_norm and "CLOSED" not in sig_norm and setup_norm:
         log_new_trade("Normal Setup", sig_norm, setup_norm, reason_norm, df_m15)
-        # ดึงข้อมูลที่เพิ่งเซฟมาโชว์เวลา
         new_trade = memory["Normal Setup"]
         if new_trade:
             sig_norm = f"⏳ TRACKING: {new_trade['signal']}"
