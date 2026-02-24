@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.19", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.20", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -27,6 +27,7 @@ if 'pending_trades' not in st.session_state: st.session_state.pending_trades = [
 if 'log_history' not in st.session_state: st.session_state.log_history = {} 
 if 'last_us_open_summary_date' not in st.session_state: st.session_state.last_us_open_summary_date = ""
 
+# ⚠️ URL Firebase และ Google Sheet
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
 TELEGRAM_BOT_TOKEN = "8239625215:AAF7qUsz2O5mhINRhRYPTICljJsCErDDLD8"
@@ -63,7 +64,7 @@ def send_telegram_notify(msg, image_path=None):
         try: requests.post(url, json=data, timeout=5)
         except: pass
 
-# --- 2. DATA ENGINE (🛡️ ใส่เกราะกัน Error ประเภทข้อมูล) ---
+# --- 2. DATA ENGINE (🛡️ Safe Mode) ---
 @st.cache_data(ttl=30)
 def get_market_data():
     metrics = {'GOLD': (0.0, 0.0), 'GC_F': (0.0, 0.0), 'DXY': (0.0, 0.0), 'US10Y': (0.0, 0.0)}
@@ -75,7 +76,7 @@ def get_market_data():
             if 'XAUUSD' in data:
                 df_xau = pd.DataFrame(data['XAUUSD'])
                 df_xau.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
-                for col in ['open', 'high', 'low', 'close']: df_xau[col] = pd.to_numeric(df_xau[col], errors='coerce') # 🛡️ บังคับเป็นตัวเลข
+                for col in ['open', 'high', 'low', 'close']: df_xau[col] = pd.to_numeric(df_xau[col], errors='coerce')
                 df_xau.dropna(inplace=True)
                 curr_gold, prev_gold = float(df_xau['close'].iloc[-1]), float(df_xau['close'].iloc[-2])
                 metrics['GOLD'] = (curr_gold, ((curr_gold - prev_gold) / prev_gold) * 100)
@@ -83,7 +84,7 @@ def get_market_data():
             if 'XAUUSD_H1' in data:
                 df_h1 = pd.DataFrame(data['XAUUSD_H1'])
                 df_h1.rename(columns={'o':'open', 'h':'high', 'l':'low', 'c':'close', 't':'time'}, inplace=True)
-                for col in ['open', 'high', 'low', 'close']: df_h1[col] = pd.to_numeric(df_h1[col], errors='coerce') # 🛡️ บังคับเป็นตัวเลข
+                for col in ['open', 'high', 'low', 'close']: df_h1[col] = pd.to_numeric(df_h1[col], errors='coerce')
                 df_h1.dropna(inplace=True)
                 df_h4 = df_h1
             if 'DXY' in data:
@@ -234,7 +235,7 @@ def get_breaking_news():
     speed_news.sort(key=lambda x: x['timestamp'], reverse=True)
     return speed_news[:10]
 
-# 🛡️ V12.19: ฟังก์ชันวิเคราะห์เทรนด์ (Safe Mode ไร้ Error)
+# 💡 V12.18: ฟังก์ชันอัปเกรดคำนวณเทรนด์ให้แม่นยำขึ้น
 def identify_trend(df):
     if df is None or df.empty or len(df) < 50: return "ไซด์เวย์ ⚪", "SIDEWAY"
     try:
@@ -250,6 +251,7 @@ def identify_trend(df):
     except Exception as e: print("Identify Trend Error:", e)
     return "ไซด์เวย์ ⚪", "SIDEWAY"
 
+# 💡 V12.18: ฟังก์ชันหาโซนสำคัญของ H4
 def get_h4_zones(df_h4):
     demand_h4, supply_h4 = [], []
     if df_h4 is None or len(df_h4) < 20: return demand_h4, supply_h4
@@ -272,12 +274,12 @@ def detect_choch_and_sweep(df):
     if recent['high'].iloc[-5:-1].max() > highest_high and current_close < recent['low'].iloc[-5:-1].min(): return True, "SELL", recent['high'].iloc[-5:-1].max(), current_close
     return False, "", 0, 0
 
-# --- 4. CORE AI (V12.19 SMC Master) ---
+# --- 4. CORE AI (V12.18 SMC Master) ---
 def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir):
     if is_market_closed or df_m15 is None or len(df_m15) < 50: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, False
     
     atr_val = 5.0
-    try: # 🛡️ ป้องกัน Error จากอินดิเคเตอร์
+    try: 
         atr_series = ta.atr(df_m15['high'], df_m15['low'], df_m15['close'], length=14)
         if atr_series is not None and not atr_series.empty: atr_val = float(atr_series.iloc[-2])
     except: pass
@@ -285,7 +287,7 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
     macd_hist = 0.0
     try:
         macd_series = ta.macd(df_m15['close'], fast=12, slow=26, signal=9)
-        if macd_series is not None and not macd_series.empty: macd_hist = float(macd_series.iloc[-1, 1]) # Column MACDh
+        if macd_series is not None and not macd_series.empty: macd_hist = float(macd_series.iloc[-1, 1]) 
     except: pass
 
     current_m15 = df_m15.iloc[-1]
@@ -480,6 +482,15 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
         requests.post(GOOGLE_SHEET_API_URL, json=payload, timeout=3)
         st.session_state.pending_trades.append(internal_trade)
 
+        img_path = "setup_chart.png"
+        fig = plot_setup_chart(df_m15, setup_data, mode="All-In" if "All-In" in setup_type else "Normal")
+        if fig:
+            try: 
+                fig.write_image(img_path)
+                time.sleep(1) 
+            except Exception as img_e: 
+                img_path = None
+
         tg_msg = f"🎯 [NEW SETUP] แจ้งเตือนจุดเข้า!\n⏰ เวลาออก Setup: {thai_dt_str}\n\nMode: {setup_type}\nSignal: {sig}\n\n📍 Entry: {entry_str}\n"
         if risk > 0: tg_msg += f"🛑 SL: {sl_str} (Risk = ${risk:.2f})\n💰 TP: {tp_str} (Reward = ${reward:.2f})\n🧮 Risk:Reward: 1:{rr:.2f}\n\n"
         else: tg_msg += f"🛑 SL: {sl_str}\n💰 TP: {tp_str}\n\n"
@@ -489,7 +500,7 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
             ev_status = "Positive EV คุ้มค่าที่จะเสี่ยง! ✅" if ev_r > 0 else "Negative EV ความเสี่ยงสูง ⚠️"
             tg_msg += f"🎲 Implied Win Rate: {int(wr_pct)}% (ระดับ {stars_count} ดาว)\n📈 Expected Value (EV): {ev_r:+.2f} R ({ev_status})"
 
-        send_telegram_notify(tg_msg)
+        send_telegram_notify(tg_msg, img_path)
     except Exception as e: print("Log Error:", e)
 
 def check_pending_trades(current_high, current_low):
@@ -539,6 +550,26 @@ def generate_telegram_us_briefing(trend_h4_str, trend_m15_str, metrics, sentimen
 
     msg = f"🗽🇺🇸 US Session Briefing 🇺🇸🗽\nประจำวันที่: {now_thai.strftime('%d %b %Y | 19:30 น.')}\n\n📊 [Technical]\nTrend H4: {trend_h4_str}\nTrend M15 (ล่าสุด): {trend_m15_str}\nXAUUSD: ${metrics['GOLD'][0]:.2f}\n\n💵 [Macro / 5 Pillars]\nDXY: {metrics['DXY'][0]:.2f} ({dxy_status})\nUS10Y: {metrics['US10Y'][0]:.2f}% ({us10y_status})\nGC=F (Premium): {gcf_status}\nSPDR Fund: {spdr_val}\n\n🐑 [Retail Sentiment]\nS:{sentiment.get('short',50)}% / L:{sentiment.get('long',50)}% ({senti_status})\n\n📅 [US Economic News Tonight]\n{today_news_str}\n⚠️ [Geo-Politics]\n{geo_str}\n\n🤖 AI Prediction: โฟกัสจุดเข้าตามเทรนด์ M15 และคุม Position Size ตามหลัก Positive EV"
     return msg
+
+def plot_setup_chart(df, setup_dict, mode="Normal"):
+    if df is None or df.empty or not setup_dict: return None
+    df_plot = df.tail(100).copy()
+    df_plot['datetime'] = pd.to_datetime(df_plot['time'], unit='s')
+    fig = go.Figure(data=[go.Candlestick(x=df_plot['datetime'], open=df_plot['open'], high=df_plot['high'], low=df_plot['low'], close=df_plot['close'], increasing_line_color='#00ff00', decreasing_line_color='#ff3333')])
+    def get_prices(t): return [float(x) for x in re.findall(r'\d+\.\d+', str(t).replace(',', ''))]
+    sl, tp, entry, sweep = get_prices(setup_dict.get('SL', '')), get_prices(setup_dict.get('TP', '')), get_prices(setup_dict.get('Entry', '')), get_prices(setup_dict.get('Sweep', '')) 
+    entry_text = str(setup_dict.get('Entry', ''))
+    label_text = "🎯 Entry Zone" if "โซน" in entry_text else "🎯 Entry"
+    line_color = "#ffcc00" if mode == "All-In" else "#00ccff"
+    
+    if sl: fig.add_hline(y=sl[0], line_dash="dash", line_color="#ff4444", annotation_text="🛑 SL", annotation_position="bottom right", annotation_font_color="#ff4444")
+    if tp: fig.add_hline(y=tp[0], line_dash="dash", line_color="#00ff00", annotation_text="💰 TP", annotation_position="top right", annotation_font_color="#00ff00")
+    if sweep: fig.add_hline(y=sweep[0], line_dash="dot", line_color="#ff00ff", annotation_text="⚡ CHoCH / Sweep", annotation_position="left", annotation_font_color="#ff00ff")
+    if entry:
+        if len(entry) >= 2: fig.add_hrect(y0=min(entry), y1=max(entry), fillcolor=f"rgba({'255, 204, 0' if mode=='All-In' else '0, 204, 255'}, 0.2)", line_width=1, annotation_text=label_text, annotation_position="top right")
+        else: fig.add_hline(y=entry[0], line_dash="dash", line_color=line_color, annotation_text=label_text, annotation_position="top right", annotation_font_color=line_color)
+    fig.update_layout(template='plotly_dark', margin=dict(l=10, r=50, t=10, b=10), height=350, xaxis_rangeslider_visible=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    return fig
 
 def get_setup_time_html(setup_type, current_sig, base_color):
     hist = st.session_state.log_history.get(setup_type)
@@ -660,8 +691,13 @@ with col_allin:
         {time_html_allin}
     """, unsafe_allow_html=True)
     if setup_allin:
-        st.markdown(f"""<div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid #444; margin-top: 15px;"><div style="color:#ffcc00; font-weight:bold; margin-bottom:5px;">🎯 1:2 Geometry Setup:</div><div>📍 <b>Entry:</b> {setup_allin['Entry']}</div><div style="color:#ff4444;">🛑 <b>SL:</b> {setup_allin['SL']}</div><div style="color:#00ff00;">💰 <b>TP:</b> {setup_allin['TP']}</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid #444; margin-top: 15px;"><div style="color:#ffcc00; font-weight:bold; margin-bottom:5px;">🎯 1:2 Geometry Setup:</div><div>📍 <b>Entry:</b> {setup_allin.get('Entry','')}</div><div style="color:#ff4444;">🛑 <b>SL:</b> {setup_allin.get('SL','')}</div><div style="color:#00ff00;">💰 <b>TP:</b> {setup_allin.get('TP','')}</div></div>""", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
+    
+    if setup_allin and not is_market_closed and df_m15 is not None: 
+        st.plotly_chart(plot_setup_chart(df_m15, setup_allin, mode="All-In"), use_container_width=True)
+    else: 
+        st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #ff3333; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังรอพายุสภาพคล่อง...</div>", unsafe_allow_html=True)
 
 with col_normal:
     st.markdown("<h2 class='title-header' style='color: #00ccff;'>⭐ 5-Star Trade Matrix</h2>", unsafe_allow_html=True)
@@ -677,8 +713,15 @@ with col_normal:
         <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Score & Logic:</b><br>{reason_norm}</div>
         {time_html_norm}
     """, unsafe_allow_html=True)
-    if setup_norm and not is_market_closed and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_norm, mode="Normal"), use_container_width=True)
-    else: st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #00ccff; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังคำนวณ Probability Matrix...</div>", unsafe_allow_html=True)
+    
+    if setup_norm:
+        st.markdown(f"""<div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid #444; margin-top: 15px;"><div style="color:#00ccff; font-weight:bold; margin-bottom:5px;">🎯 Dynamic Zones:</div><div>📍 <b>Entry:</b> {setup_norm.get('Entry','')}</div><div style="color:#ff4444;">🛑 <b>SL:</b> {setup_norm.get('SL','')}</div><div style="color:#00ff00;">💰 <b>TP:</b> {setup_norm.get('TP','')}</div></div>""", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    if setup_norm and not is_market_closed and df_m15 is not None: 
+        st.plotly_chart(plot_setup_chart(df_m15, setup_norm, mode="Normal"), use_container_width=True)
+    else: 
+        st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #00ccff; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังคำนวณ Probability Matrix...</div>", unsafe_allow_html=True)
 
 st.write("---")
 
