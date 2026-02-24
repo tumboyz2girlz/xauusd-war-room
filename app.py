@@ -677,9 +677,8 @@ with col_normal:
         <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Score & Logic:</b><br>{reason_norm}</div>
         {time_html_norm}
     """, unsafe_allow_html=True)
-    if setup_norm:
-        st.markdown(f"""<div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid #444; margin-top: 15px;"><div style="color:#00ccff; font-weight:bold; margin-bottom:5px;">🎯 Dynamic Zones:</div><div>📍 <b>Entry:</b> {setup_norm['Entry']}</div><div style="color:#ff4444;">🛑 <b>SL:</b> {setup_norm['SL']}</div><div style="color:#00ff00;">💰 <b>TP:</b> {setup_norm['TP']}</div></div>""", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    if setup_norm and not is_market_closed and df_m15 is not None: st.plotly_chart(plot_setup_chart(df_m15, setup_norm, mode="Normal"), use_container_width=True)
+    else: st.markdown("<div style='background-color:#1a1a2e; padding:40px; text-align:center; border-radius:10px; border: 1px dashed #00ccff; height: 350px; display: flex; align-items: center; justify-content: center;'>📡 กำลังคำนวณ Probability Matrix...</div>", unsafe_allow_html=True)
 
 st.write("---")
 
