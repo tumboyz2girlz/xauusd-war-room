@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.26", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.27", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -102,12 +102,13 @@ def get_market_data():
             if 'NEWS' in data:
                 now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
                 for ev in data['NEWS']:
-                    # 💡 V12.26: บังคับคำนวณจากเวลา UTC แล้วบวก 7 เป็นเวลาไทยให้เป๊ะ
-                    event_dt = datetime.datetime.utcfromtimestamp(ev['time_sec']) + datetime.timedelta(hours=7)
-                    time_diff_hours = (event_dt - now_thai).total_seconds() / 3600
-                    # 💡 V12.26: แสดงผลรูปแบบ วันที่ + เวลา
-                    time_str = event_dt.strftime("%d %b | %H:%M น.")
-                    mt5_news.append({'source': 'MT5', 'title': ev['title'], 'time': time_str, 'impact': ev['impact'], 'actual': st.session_state.manual_overrides.get(ev['title'], ev['actual']), 'forecast': ev['forecast'], 'direction': ev.get('direction', ''), 'dt': event_dt, 'time_diff_hours': time_diff_hours})
+                    try: # 🛡️ บังคับตัวเลขเวลาและดักจับ Error
+                        event_dt = datetime.datetime.utcfromtimestamp(float(ev['time_sec'])) + datetime.timedelta(hours=7)
+                        time_diff_hours = (event_dt - now_thai).total_seconds() / 3600
+                        time_str = event_dt.strftime("%d %b | %H:%M น.")
+                        mt5_news.append({'source': 'MT5', 'title': ev['title'], 'time': time_str, 'impact': ev['impact'], 'actual': st.session_state.manual_overrides.get(ev['title'], ev['actual']), 'forecast': ev['forecast'], 'direction': ev.get('direction', ''), 'dt': event_dt, 'time_diff_hours': time_diff_hours})
+                    except Exception as inner_e:
+                        print("News Parse Error:", inner_e)
     except Exception as e: print("Firebase Error:", e)
     
     try:
@@ -160,7 +161,6 @@ def get_forexfactory_usd():
                 thai_dt = gmt_dt + datetime.timedelta(hours=7)
                 time_diff_hours = (thai_dt - now_thai).total_seconds() / 3600
                 if time_diff_hours < -12.0 or (impact == 'High' and time_diff_hours > 24): continue
-                # 💡 V12.26: แสดงผลรูปแบบ วันที่ + เวลา
                 time_str = thai_dt.strftime("%d %b | %H:%M น.")
                 ff_news.append({'source': 'FF', 'title': title, 'time': time_str, 'impact': impact, 'actual': st.session_state.manual_overrides.get(title, event.find('actual').text if event.find('actual') is not None else "Pending"), 'forecast': event.find('forecast').text if event.find('forecast') is not None else "", 'direction': '', 'dt': thai_dt, 'time_diff_hours': time_diff_hours})
         return ff_news
@@ -182,7 +182,7 @@ def merge_news_sources(mt5_list, ff_list):
     for ev in merged:
         if ev['impact'] == 'High' and -0.5 <= ev['time_diff_hours'] <= 6:
             if next_red_news is None or ev['time_diff_hours'] < next_red_news['hours']:
-                next_red_news = {'title': ev['title'], 'hours': ev['time_diff_hours'], 'time': ev['dt'].strftime("%H:%M น.")} # 💡 ปรับเวลาให้ตรงเช่นกัน
+                next_red_news = {'title': ev['title'], 'hours': ev['time_diff_hours'], 'time': ev['dt'].strftime("%H:%M น.")}
     return merged, next_red_news
 
 @st.cache_data(ttl=600)
@@ -614,7 +614,7 @@ def generate_telegram_us_briefing(trend_h4_str, trend_m15_str, metrics, sentimen
     us10y_status = "ปรับตัวลง 🟢" if metrics['US10Y'][1] < 0 else "พุ่งขึ้น 🔴"
     gcf_status = "ซื้อเก็บ 🟢" if metrics['GC_F'][1] > 0 else "เทขาย 🔴"
     senti_status = "หนุนทองขึ้น 🟢" if sentiment.get('short',50) > 50 else "กดดันทองลง 🔴"
-    today_news_str = "".join([f"- {ev['time']} น. : {ev['title']}\n" for ev in final_news_list if ev['dt'].date() == now_thai.date() and ev['impact'] == 'High']) or "- ไม่มีข่าวกล่องแดงคืนนี้ ✅\n"
+    today_news_str = "".join([f"- {ev['dt'].strftime('%H:%M น.')} : {ev['title']}\n" for ev in final_news_list if ev['dt'].date() == now_thai.date() and ev['impact'] == 'High']) or "- ไม่มีข่าวกล่องแดงคืนนี้ ✅\n"
     geo_str = f"- {war_news[0]['title_th']} (Impact: {war_news[0]['score']:.1f}/10) {war_news[0]['direction']}" if war_news else "- สงบสุข ไม่มีข่าวฉุกเฉิน ⚪"
 
     spdr_display = interpret_spdr(spdr_val)
@@ -724,7 +724,11 @@ if not is_market_closed and now_thai.hour == 19 and now_thai.minute >= 30 and st
 with st.sidebar:
     st.header("💻 War Room Terminal")
     layout_mode = st.radio("Display:", ["🖥️ Desktop", "📱 Mobile"])
-    if st.button("Refresh Data", type="primary"): st.cache_data.clear()
+    
+    # 💡 ปุ่ม Refresh สีแดง สะดุดตา ให้กดเพื่อล้าง Cache ทิ้ง!
+    if st.button("🔄 Refresh & Clear Cache", type="primary"): 
+        st.cache_data.clear()
+        st.rerun()
     
     st.markdown("---")
     st.subheader("🏦 อัปเดตกองทุน SPDR")
@@ -740,7 +744,9 @@ with st.sidebar:
         if "Pending" in ev['actual'] and -12.0 <= ev.get('time_diff_hours', 0) <= 24.0:
             has_pending = True
             source_tag = "⚡" if ev.get('source') == 'MT5' else "🌐"
-            new_val = st.text_input(f"{source_tag} [{ev['time']}] {ev['title']}", value=st.session_state.manual_overrides.get(ev['title'], ""), key=f"override_{i}")
+            # 💡 บังคับโชว์วันที่ในเมนู Override
+            time_display = ev['dt'].strftime('%d %b | %H:%M น.')
+            new_val = st.text_input(f"{source_tag} [{time_display}] {ev['title']}", value=st.session_state.manual_overrides.get(ev['title'], ""), key=f"override_{i}")
             if new_val != st.session_state.manual_overrides.get(ev['title'], ""):
                 st.session_state.manual_overrides[ev['title']] = new_val
                 st.rerun()
@@ -821,7 +827,10 @@ def display_intelligence():
     tab_eco, tab_pol, tab_war, tab_speed = st.tabs(["📅 ข่าวเศรษฐกิจ", "🏛️ Fed", "⚔️ สงคราม", "⚡ ข่าวด่วน"])
     with tab_eco:
         if final_news_list:
-            for ev in final_news_list: st.markdown(f"<div class='ff-card' style='border-left-color: {'#ff3333' if ev['impact']=='High' else '#ff9933'};'><div style='font-size:11px; color:#aaa;'>{'⚡ MT5' if ev.get('source')=='MT5' else '🌐 FF'} | {ev['time']}</div><div style='font-size:15px;'><b>{ev['title']}</b></div><div style='font-size:13px; color:#aaa;'>Forecast: {ev['forecast']} | <span style='color:#ffcc00;'>Actual: {ev['actual']}</span></div></div>", unsafe_allow_html=True)
+            for ev in final_news_list: 
+                # 💡 บังคับการแสดงผลวันที่หน้าเว็บแบบ Real-time ข้ามระบบ Cache ไปเลย
+                time_display = ev['dt'].strftime('%d %b | %H:%M น.')
+                st.markdown(f"<div class='ff-card' style='border-left-color: {'#ff3333' if ev['impact']=='High' else '#ff9933'};'><div style='font-size:11px; color:#aaa;'>{'⚡ MT5' if ev.get('source')=='MT5' else '🌐 FF'} | {time_display}</div><div style='font-size:15px;'><b>{ev['title']}</b></div><div style='font-size:13px; color:#aaa;'>Forecast: {ev['forecast']} | <span style='color:#ffcc00;'>Actual: {ev['actual']}</span></div></div>", unsafe_allow_html=True)
         else: st.write("ไม่มีข่าว")
     with tab_pol:
         for news in pol_news: st.markdown(f"<div class='news-card'><a href='{news['link']}' target='_blank' style='color:#fff;'>🇺🇸 {news['title_th']}</a><br><span style='font-size:11px; color:#888;'>🕒 {news['time']}</span><br><span style='font-size: 12px; color: #aaa;'><b>AI:</b> {news['direction']} | SMIS Impact: {news['score']:.1f}/10</span></div>", unsafe_allow_html=True)
