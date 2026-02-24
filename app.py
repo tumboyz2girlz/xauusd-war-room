@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.25", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.26", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -60,17 +60,14 @@ def send_telegram_notify(msg, image_path=None):
         try: requests.post(url, json=data, timeout=5)
         except: pass
 
-# 💡 V12.25: ตัวแปลภาษา SPDR (Smart Money Translator)
 def interpret_spdr(val_str):
-    if not val_str or str(val_str).strip().lower() == "neutral": 
-        return "รอดูท่าที ⚪"
+    if not val_str or str(val_str).strip().lower() == "neutral": return "รอดูท่าที ⚪"
     try:
         val = float(str(val_str).replace('+', '').replace(',', '').strip())
         if val > 0: return f"เจ้าเก็บของ 🟢 (+{val} ตัน)"
         elif val < 0: return f"เจ้าเทของ 🔴 ({val} ตัน)"
         else: return "รอดูท่าที ⚪ (0 ตัน)"
-    except:
-        return str(val_str)
+    except: return str(val_str)
 
 # --- 2. DATA ENGINE ---
 @st.cache_data(ttl=30)
@@ -105,9 +102,12 @@ def get_market_data():
             if 'NEWS' in data:
                 now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
                 for ev in data['NEWS']:
-                    event_dt = datetime.datetime.fromtimestamp(ev['time_sec']) 
+                    # 💡 V12.26: บังคับคำนวณจากเวลา UTC แล้วบวก 7 เป็นเวลาไทยให้เป๊ะ
+                    event_dt = datetime.datetime.utcfromtimestamp(ev['time_sec']) + datetime.timedelta(hours=7)
                     time_diff_hours = (event_dt - now_thai).total_seconds() / 3600
-                    mt5_news.append({'source': 'MT5', 'title': ev['title'], 'time': event_dt.strftime("%H:%M"), 'impact': ev['impact'], 'actual': st.session_state.manual_overrides.get(ev['title'], ev['actual']), 'forecast': ev['forecast'], 'direction': ev.get('direction', ''), 'dt': event_dt, 'time_diff_hours': time_diff_hours})
+                    # 💡 V12.26: แสดงผลรูปแบบ วันที่ + เวลา
+                    time_str = event_dt.strftime("%d %b | %H:%M น.")
+                    mt5_news.append({'source': 'MT5', 'title': ev['title'], 'time': time_str, 'impact': ev['impact'], 'actual': st.session_state.manual_overrides.get(ev['title'], ev['actual']), 'forecast': ev['forecast'], 'direction': ev.get('direction', ''), 'dt': event_dt, 'time_diff_hours': time_diff_hours})
     except Exception as e: print("Firebase Error:", e)
     
     try:
@@ -160,7 +160,9 @@ def get_forexfactory_usd():
                 thai_dt = gmt_dt + datetime.timedelta(hours=7)
                 time_diff_hours = (thai_dt - now_thai).total_seconds() / 3600
                 if time_diff_hours < -12.0 or (impact == 'High' and time_diff_hours > 24): continue
-                ff_news.append({'source': 'FF', 'title': title, 'time': thai_dt.strftime("%H:%M"), 'impact': impact, 'actual': st.session_state.manual_overrides.get(title, event.find('actual').text if event.find('actual') is not None else "Pending"), 'forecast': event.find('forecast').text if event.find('forecast') is not None else "", 'direction': '', 'dt': thai_dt, 'time_diff_hours': time_diff_hours})
+                # 💡 V12.26: แสดงผลรูปแบบ วันที่ + เวลา
+                time_str = thai_dt.strftime("%d %b | %H:%M น.")
+                ff_news.append({'source': 'FF', 'title': title, 'time': time_str, 'impact': impact, 'actual': st.session_state.manual_overrides.get(title, event.find('actual').text if event.find('actual') is not None else "Pending"), 'forecast': event.find('forecast').text if event.find('forecast') is not None else "", 'direction': '', 'dt': thai_dt, 'time_diff_hours': time_diff_hours})
         return ff_news
     except: return []
 
@@ -180,7 +182,7 @@ def merge_news_sources(mt5_list, ff_list):
     for ev in merged:
         if ev['impact'] == 'High' and -0.5 <= ev['time_diff_hours'] <= 6:
             if next_red_news is None or ev['time_diff_hours'] < next_red_news['hours']:
-                next_red_news = {'title': ev['title'], 'hours': ev['time_diff_hours'], 'time': ev['dt'].strftime("%H:%M น.")}
+                next_red_news = {'title': ev['title'], 'hours': ev['time_diff_hours'], 'time': ev['dt'].strftime("%H:%M น.")} # 💡 ปรับเวลาให้ตรงเช่นกัน
     return merged, next_red_news
 
 @st.cache_data(ttl=600)
@@ -615,7 +617,6 @@ def generate_telegram_us_briefing(trend_h4_str, trend_m15_str, metrics, sentimen
     today_news_str = "".join([f"- {ev['time']} น. : {ev['title']}\n" for ev in final_news_list if ev['dt'].date() == now_thai.date() and ev['impact'] == 'High']) or "- ไม่มีข่าวกล่องแดงคืนนี้ ✅\n"
     geo_str = f"- {war_news[0]['title_th']} (Impact: {war_news[0]['score']:.1f}/10) {war_news[0]['direction']}" if war_news else "- สงบสุข ไม่มีข่าวฉุกเฉิน ⚪"
 
-    # 💡 ใช้ SPDR ที่แปลภาษาแล้ว
     spdr_display = interpret_spdr(spdr_val)
     
     msg = f"🗽🇺🇸 US Session Briefing 🇺🇸🗽\nประจำวันที่: {now_thai.strftime('%d %b %Y | 19:30 น.')}\n\n📊 [Technical]\nTrend H4: {trend_h4_str}\nTrend M15 (ล่าสุด): {trend_m15_str}\nXAUUSD: ${metrics['GOLD'][0]:.2f}\n\n💵 [Macro / 5 Pillars]\nDXY: {metrics['DXY'][0]:.2f} ({dxy_status})\nUS10Y: {metrics['US10Y'][0]:.2f}% ({us10y_status})\nGC=F (Premium): {gcf_status}\nSPDR Fund: {spdr_display}\n\n🐑 [Retail Sentiment]\nS:{sentiment.get('short',50)}% / L:{sentiment.get('long',50)}% ({senti_status})\n\n📅 [US Economic News Tonight]\n{today_news_str}\n⚠️ [Geo-Politics]\n{geo_str}\n\n🤖 AI Prediction: โฟกัสจุดเข้าตามเทรนด์ M15 และคุม Position Size ตามหลัก Positive EV"
@@ -753,7 +754,6 @@ with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1
 with c2: st.metric("GC=F", f"${metrics['GC_F'][0]:,.2f}", f"{metrics['GC_F'][1]:.2f}%")
 with c3: st.metric("DXY", f"{metrics['DXY'][0]:,.2f}", f"{metrics['DXY'][1]:.2f}%", delta_color="inverse")
 with c4: st.metric("US10Y", f"{metrics['US10Y'][0]:,.2f}", f"{metrics['US10Y'][1]:.2f}%", delta_color="inverse")
-# 💡 ใช้ตัวแปลภาษา SPDR ตรงนี้
 with c5: st.metric("SPDR Flow", interpret_spdr(st.session_state.spdr_manual))
 with c6: st.metric("Retail Senti.", f"S:{sentiment.get('short',50)}%", f"L:{sentiment.get('long',50)}%", delta_color="off")
 
