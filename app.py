@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.24", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.25", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -59,6 +59,18 @@ def send_telegram_notify(msg, image_path=None):
         data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
         try: requests.post(url, json=data, timeout=5)
         except: pass
+
+# 💡 V12.25: ตัวแปลภาษา SPDR (Smart Money Translator)
+def interpret_spdr(val_str):
+    if not val_str or str(val_str).strip().lower() == "neutral": 
+        return "รอดูท่าที ⚪"
+    try:
+        val = float(str(val_str).replace('+', '').replace(',', '').strip())
+        if val > 0: return f"เจ้าเก็บของ 🟢 (+{val} ตัน)"
+        elif val < 0: return f"เจ้าเทของ 🔴 ({val} ตัน)"
+        else: return "รอดูท่าที ⚪ (0 ตัน)"
+    except:
+        return str(val_str)
 
 # --- 2. DATA ENGINE ---
 @st.cache_data(ttl=30)
@@ -256,17 +268,16 @@ def get_h4_zones(df_h4):
         except: continue
     return demand_h4, supply_h4
 
-# 💡 V12.24: ระบบสแกนแท่งเทียนกลับตัว (Candlestick Reversal Scanner)
 def detect_candlestick_reversal(df, direction):
     if len(df) < 3: return False, ""
-    c1 = df.iloc[-1] # แท่งปัจจุบัน (อาจจะยังไม่ปิด)
-    c2 = df.iloc[-2] # แท่งก่อนหน้า (ปิดแล้ว)
+    c1 = df.iloc[-1] 
+    c2 = df.iloc[-2] 
 
     def get_props(c):
         body = abs(c['open'] - c['close'])
         high, low = c['high'], c['low']
-        uw = high - max(c['open'], c['close']) # Upper Wick
-        lw = min(c['open'], c['close']) - low  # Lower Wick
+        uw = high - max(c['open'], c['close']) 
+        lw = min(c['open'], c['close']) - low  
         is_green = c['close'] > c['open']
         is_red = c['close'] < c['open']
         return body, uw, lw, is_green, is_red
@@ -274,16 +285,15 @@ def detect_candlestick_reversal(df, direction):
     b1, uw1, lw1, g1, r1 = get_props(c1)
     b2, uw2, lw2, g2, r2 = get_props(c2)
 
-    if direction == "UP": # หาจุดกลับตัวเป็นขาขึ้น (ดัก Buy)
+    if direction == "UP": 
         if r2 and g1 and c1['close'] > c2['open'] and c1['open'] <= c2['close']: 
             return True, "Bullish Engulfing (กลืนกินขาขึ้น)"
         if lw1 > (b1 * 2) and uw1 < b1 and lw1 > 1.0: 
             return True, "Bullish Pinbar / Hammer (หางยาวแทงลง)"
-        # เช็คแท่งก่อนหน้าเผื่อมันเพิ่งปิดไป
         if lw2 > (b2 * 2) and uw2 < b2 and lw2 > 1.0 and g1: 
             return True, "Confirmed Hammer (แฮมเมอร์ยืนยัน)"
             
-    elif direction == "DOWN": # หาจุดกลับตัวเป็นขาลง (ดัก Sell)
+    elif direction == "DOWN": 
         if g2 and r1 and c1['close'] < c2['open'] and c1['open'] >= c2['close']: 
             return True, "Bearish Engulfing (กลืนกินขาลง)"
         if uw1 > (b1 * 2) and lw1 < b1 and uw1 > 1.0: 
@@ -302,7 +312,6 @@ def detect_choch_and_sweep(df):
     if recent['high'].iloc[-5:-1].max() > highest_high and current_close < recent['low'].iloc[-5:-1].min(): return True, "SELL", recent['high'].iloc[-5:-1].max(), current_close
     return False, "", 0, 0
 
-# --- 🧠 THE "ONE SHOT, ONE KILL" MEMORY SYSTEM ---
 @st.cache_resource
 def get_trade_memory():
     return {"Normal Setup": None, "All-In Setup": None}
@@ -352,7 +361,6 @@ def check_active_trades(current_high, current_low):
                 send_telegram_notify(tg_msg)
                 memory[mode] = None 
 
-# --- 4. CORE AI (V12.24) ---
 def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir):
     if is_market_closed or df_m15 is None or len(df_m15) < 50: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, False
     
@@ -373,7 +381,6 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
         current_close = float(df.iloc[-1]['close'])
         mtf_aligned = False
         
-        # 💡 เช็คแท่งเทียนกลับตัวในโซน FVG
         has_candle, candle_name = detect_candlestick_reversal(df, trend_dir)
         
         if trend_dir == "UP": 
@@ -439,7 +446,6 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
     if (trend_m15_dir == "UP" and dxy_trend < 0) or (trend_m15_dir == "DOWN" and dxy_trend > 0):
         stars += 1; logic_details.append("⭐ ดัชนี DXY เคลื่อนไหวสนับสนุนทิศทางทองคำ")
 
-    # 💡 เพิ่มดาวถ้าเจอแท่งเทียนกลับตัว
     if has_candle:
         stars += 1
         logic_details.append(f"🔥 Price Action: พบแท่งเทียน '{candle_name}' ยืนยันในโซน")
@@ -476,7 +482,6 @@ def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_
     found_sweep, direction, sweep_price, current_price = detect_choch_and_sweep(df_m15)
     if not found_sweep: return "WAIT", "🟢 ข่าวออกแล้ว แต่ยังไม่พบโครงสร้าง Liquidity Sweep", {}, "🟢"
     
-    # 💡 All-In บังคับต้องมี Price Action ยืนยัน
     has_candle, candle_name = detect_candlestick_reversal(df_m15, direction)
     if not has_candle: 
         return "WAIT", f"🟢 เกิดโครงสร้าง CHoCH แล้ว รอแท่งเทียนกลับตัว (Price Action) คอนเฟิร์มจุดเข้า", {}, "🟢"
@@ -610,7 +615,10 @@ def generate_telegram_us_briefing(trend_h4_str, trend_m15_str, metrics, sentimen
     today_news_str = "".join([f"- {ev['time']} น. : {ev['title']}\n" for ev in final_news_list if ev['dt'].date() == now_thai.date() and ev['impact'] == 'High']) or "- ไม่มีข่าวกล่องแดงคืนนี้ ✅\n"
     geo_str = f"- {war_news[0]['title_th']} (Impact: {war_news[0]['score']:.1f}/10) {war_news[0]['direction']}" if war_news else "- สงบสุข ไม่มีข่าวฉุกเฉิน ⚪"
 
-    msg = f"🗽🇺🇸 US Session Briefing 🇺🇸🗽\nประจำวันที่: {now_thai.strftime('%d %b %Y | 19:30 น.')}\n\n📊 [Technical]\nTrend H4: {trend_h4_str}\nTrend M15 (ล่าสุด): {trend_m15_str}\nXAUUSD: ${metrics['GOLD'][0]:.2f}\n\n💵 [Macro / 5 Pillars]\nDXY: {metrics['DXY'][0]:.2f} ({dxy_status})\nUS10Y: {metrics['US10Y'][0]:.2f}% ({us10y_status})\nGC=F (Premium): {gcf_status}\nSPDR Fund: {spdr_val}\n\n🐑 [Retail Sentiment]\nS:{sentiment.get('short',50)}% / L:{sentiment.get('long',50)}% ({senti_status})\n\n📅 [US Economic News Tonight]\n{today_news_str}\n⚠️ [Geo-Politics]\n{geo_str}\n\n🤖 AI Prediction: โฟกัสจุดเข้าตามเทรนด์ M15 และคุม Position Size ตามหลัก Positive EV"
+    # 💡 ใช้ SPDR ที่แปลภาษาแล้ว
+    spdr_display = interpret_spdr(spdr_val)
+    
+    msg = f"🗽🇺🇸 US Session Briefing 🇺🇸🗽\nประจำวันที่: {now_thai.strftime('%d %b %Y | 19:30 น.')}\n\n📊 [Technical]\nTrend H4: {trend_h4_str}\nTrend M15 (ล่าสุด): {trend_m15_str}\nXAUUSD: ${metrics['GOLD'][0]:.2f}\n\n💵 [Macro / 5 Pillars]\nDXY: {metrics['DXY'][0]:.2f} ({dxy_status})\nUS10Y: {metrics['US10Y'][0]:.2f}% ({us10y_status})\nGC=F (Premium): {gcf_status}\nSPDR Fund: {spdr_display}\n\n🐑 [Retail Sentiment]\nS:{sentiment.get('short',50)}% / L:{sentiment.get('long',50)}% ({senti_status})\n\n📅 [US Economic News Tonight]\n{today_news_str}\n⚠️ [Geo-Politics]\n{geo_str}\n\n🤖 AI Prediction: โฟกัสจุดเข้าตามเทรนด์ M15 และคุม Position Size ตามหลัก Positive EV"
     return msg
 
 def plot_setup_chart(df, setup_dict, mode="Normal"):
@@ -745,7 +753,8 @@ with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1
 with c2: st.metric("GC=F", f"${metrics['GC_F'][0]:,.2f}", f"{metrics['GC_F'][1]:.2f}%")
 with c3: st.metric("DXY", f"{metrics['DXY'][0]:,.2f}", f"{metrics['DXY'][1]:.2f}%", delta_color="inverse")
 with c4: st.metric("US10Y", f"{metrics['US10Y'][0]:,.2f}", f"{metrics['US10Y'][1]:.2f}%", delta_color="inverse")
-with c5: st.metric("SPDR Flow", st.session_state.spdr_manual)
+# 💡 ใช้ตัวแปลภาษา SPDR ตรงนี้
+with c5: st.metric("SPDR Flow", interpret_spdr(st.session_state.spdr_manual))
 with c6: st.metric("Retail Senti.", f"S:{sentiment.get('short',50)}%", f"L:{sentiment.get('long',50)}%", delta_color="off")
 
 st.markdown(f"<div style='text-align: center; color: {'#ff4444' if is_market_closed else '#00ff00'}; font-size: 14px; margin-top: -5px; margin-bottom: 15px;'>{status_msg}</div>", unsafe_allow_html=True)
@@ -847,7 +856,8 @@ def handle_telegram_mentions(metrics, df_h4, df_m15, sentiment, final_news_list,
                 if "message" in update and "text" in update["message"]:
                     msg_text = update["message"]["text"]
                     if "@" in msg_text or msg_text.startswith("/"):
-                        if "/status" in msg_text or "ราคา" in msg_text: send_telegram_notify(f"🦅 กวักทองรายงานตัวครับ!\n\n🥇 Gold: ${metrics['GOLD'][0]:,.2f} ({metrics['GOLD'][1]:.2f}%)\n💵 DXY: {metrics['DXY'][0]:,.2f}\n🏦 SPDR: {spdr_val}\n🐑 Sentiment: S:{sentiment['short']}% | L:{sentiment['long']}%")
+                        spdr_display = interpret_spdr(spdr_val)
+                        if "/status" in msg_text or "ราคา" in msg_text: send_telegram_notify(f"🦅 กวักทองรายงานตัวครับ!\n\n🥇 Gold: ${metrics['GOLD'][0]:,.2f} ({metrics['GOLD'][1]:.2f}%)\n💵 DXY: {metrics['DXY'][0]:,.2f}\n🏦 SPDR: {spdr_display}\n🐑 Sentiment: S:{sentiment['short']}% | L:{sentiment['long']}%")
                         elif "/brief" in msg_text or "สรุป" in msg_text: send_telegram_notify(generate_telegram_us_briefing(trend_h4_str, trend_m15_str, metrics, sentiment, final_news_list, war_news, spdr_val))
                         elif "/chart" in msg_text or "กราฟ" in msg_text:
                             if setup_norm and isinstance(setup_norm, dict) and "Entry" in setup_norm:
