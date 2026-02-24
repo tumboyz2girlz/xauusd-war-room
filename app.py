@@ -17,14 +17,13 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.22", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.23", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
 if 'spdr_manual' not in st.session_state: st.session_state.spdr_manual = "Neutral"
 if 'last_us_open_summary_date' not in st.session_state: st.session_state.last_us_open_summary_date = ""
 
-# ⚠️ URL Firebase และ Google Sheet
 FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebasedatabase.app/market_data.json"
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
 TELEGRAM_BOT_TOKEN = "8239625215:AAF7qUsz2O5mhINRhRYPTICljJsCErDDLD8"
@@ -270,7 +269,6 @@ def detect_choch_and_sweep(df):
 # --- 🧠 THE "ONE SHOT, ONE KILL" MEMORY SYSTEM ---
 @st.cache_resource
 def get_trade_memory():
-    # โครงสร้างความจำ: "Normal Setup": {...ข้อมูล...}, "All-In Setup": {...ข้อมูล...}
     return {"Normal Setup": None, "All-In Setup": None}
 
 def check_active_trades(current_high, current_low):
@@ -283,12 +281,10 @@ def check_active_trades(current_high, current_low):
         
         is_long = "BUY" in trade['signal']
         
-        # ตรวจสอบการชน Entry (Activate)
         if not trade['activated']:
             if is_long and current_low <= trade['entry_val']: trade['activated'] = True
             elif not is_long and current_high >= trade['entry_val']: trade['activated'] = True
             
-        # ถ้าเข้าออเดอร์แล้ว ให้เช็คการชน TP/SL
         if trade['activated']:
             result = None
             if is_long:
@@ -299,11 +295,9 @@ def check_active_trades(current_high, current_low):
                 elif current_low <= trade['tp_val']: result = "Win / TP ✅"
                 
             if result:
-                # 1. ส่งข้อมูลอัปเดตกลับไปที่ Google Sheet
                 try: requests.post(GOOGLE_SHEET_API_URL, json={"action": "update", "id": trade['id'], "result": result}, timeout=3)
                 except: pass
                 
-                # 2. ส่งแจ้งเตือนสรุปผลลัพธ์เข้า Telegram แบบเต็มยศ
                 tg_msg = f"🏁 [RESULT] สรุปผล Setup!\n\n"
                 tg_msg += f"Mode: {mode}\nSignal: {trade['signal']}\n\n"
                 tg_msg += f"📍 Entry: {trade['display_entry']}\n"
@@ -319,11 +313,8 @@ def check_active_trades(current_high, current_low):
                     tg_msg += f"📈 Expected Value (EV): {trade['ev_r']:+.2f} R ({ev_status})\n\n"
                     
                 tg_msg += f"⚡ **Result: {result}**"
-                
                 send_telegram_notify(tg_msg)
-                
-                # 3. ลบออเดอร์เก่าทิ้ง (เคลียร์สมอง) เพื่อรับ Setup ถัดไป
-                memory[mode] = None
+                memory[mode] = None # เคลียร์สมองเมื่อเทรดจบ
 
 # --- 4. CORE AI ---
 def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir):
@@ -335,12 +326,6 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
         if atr_series is not None and not atr_series.empty: atr_val = float(atr_series.iloc[-2])
     except: pass
     
-    macd_hist = 0.0
-    try:
-        macd_series = ta.macd(df_m15['close'], fast=12, slow=26, signal=9)
-        if macd_series is not None and not macd_series.empty: macd_hist = float(macd_series.iloc[-1, 1]) 
-    except: pass
-
     current_m15 = df_m15.iloc[-1]
     red_body_size = float(current_m15['open']) - float(current_m15['close'])
     is_flash_crash = True if (red_body_size >= 30.0) and ((float(current_m15['close']) - float(current_m15['low'])) <= 5.0) else False
@@ -360,11 +345,9 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
                         entry_bot = float(df_recent['high'].iloc[i-2])
                         sl_val = entry_bot - (atr_val * 0.5)
                         tp_val = float(df_recent['high'].max())
-                        
                         for h4_bot, h4_top in h4_demands:
                             if max(entry_bot, h4_bot) <= min(entry_top, h4_top):
                                 mtf_aligned = True; break
-                                
                         if current_close > entry_top and (current_close - entry_top) < (atr_val * 2):
                             return True, f"🧲 โซน Demand FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned
                 except: continue
@@ -376,18 +359,15 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
                         entry_top = float(df_recent['low'].iloc[i-2])
                         sl_val = entry_top + (atr_val * 0.5)
                         tp_val = float(df_recent['low'].min())
-                        
                         for h4_bot, h4_top in h4_supplies:
                             if max(entry_bot, h4_bot) <= min(entry_top, h4_top):
                                 mtf_aligned = True; break
-                                
                         if current_close < entry_bot and (entry_bot - current_close) < (atr_val * 2):
                             return True, f"🧲 โซน Supply FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned
                 except: continue
         return False, "", "", "", False
 
     smc_found, smc_entry, smc_sl, smc_tp, is_mtf_aligned = get_smc_setup(df_m15, trend_m15_dir)
-    found_sweep, sweep_dir, sweep_price, _ = detect_choch_and_sweep(df_m15)
     
     news_warning = ""
     is_news_danger = False
@@ -495,7 +475,6 @@ def calculate_ev_stats(entry_str, sl_str, tp_str, stars):
 
 def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
     if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
-    
     memory = get_trade_memory()
     
     try:
@@ -524,7 +503,7 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
         tp_val = extract_price(tp_str, False, False)
         is_market = "NOW" in sig 
 
-        # 🧠 บันทึก Trade ลงใน RAM (Memory) 
+        # 🧠 บันทึก Trade ลงใน RAM เพื่อ Tracking
         trade_dict = {
             "id": trade_id,
             "signal": sig,
@@ -532,21 +511,21 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
             "display_sl": sl_str,
             "display_tp": tp_str,
             "display_reason": clean_reason,
+            "display_time": thai_dt_str,
             "rr": rr,
             "wr_pct": wr_pct,
             "ev_r": ev_r,
             "entry_val": entry_val,
             "sl_val": sl_val,
             "tp_val": tp_val,
-            "activated": is_market
+            "activated": is_market,
+            "timestamp_sec": now
         }
         memory[setup_type] = trade_dict
 
-        # ส่งขึ้น Google Sheet (Pending)
         payload = {"action": "log", "id": trade_id, "timestamp": now_str, "setup_type": setup_type, "signal": sig, "entry": entry_str, "sl": sl_str, "tp": tp_str, "reason": clean_reason}
         requests.post(GOOGLE_SHEET_API_URL, json=payload, timeout=3)
         
-        # ส่งแจ้งเตือน Telegram
         img_path = "setup_chart.png"
         fig = plot_setup_chart(df_m15, setup_data, mode="All-In" if "All-In" in setup_type else "Normal")
         if fig:
@@ -636,27 +615,55 @@ try:
 except: pass
 st.session_state.rsi = current_rsi 
 
-# 🧠 คำนวณ Setup ใหม่ แต่จะถูก Block ถ้ามีออเดอร์ค้าง
+# 🧠 ดึงความจำเพื่อเช็คว่ามีออเดอร์ค้างไหม
 memory = get_trade_memory()
 
 # --- โหมด Normal Setup ---
 sig_norm_raw, reason_norm_raw, setup_norm_raw, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir)
+time_html_norm = ""
+
 if memory["Normal Setup"] is not None:
-    sig_norm = f"WAIT (Tracking Active Setup ⏳)"
-    reason_norm = f"กำลังติดตามผล Setup เดิม: {memory['Normal Setup']['signal']}\nหากชน TP หรือ SL ระบบถึงจะค้นหาจุดเข้าใหม่"
-    setup_norm = {}
+    # 💡 ถ้ามีออเดอร์ค้าง ให้ "โหลดข้อมูลเดิมกลับมาโชว์"
+    active_trade = memory["Normal Setup"]
+    sig_norm = f"⏳ TRACKING: {active_trade['signal']}"
+    reason_norm = f"<b>[สถานะ: กำลังรันออเดอร์ รอชน TP/SL]</b><br>{active_trade['display_reason'].replace('- ', '• ')}"
+    setup_norm = {'Entry': active_trade['display_entry'], 'SL': active_trade['display_sl'], 'TP': active_trade['display_tp']}
+    elapsed_mins = int((time.time() - active_trade["timestamp_sec"]) / 60)
+    time_html_norm = f"<div style='font-size:13px; color:#00ccff; margin-top:8px; padding-top:8px; border-top:1px dashed #444;'>🕒 <b>เวลาออก Setup:</b> {active_trade['display_time']} (ผ่านมา {elapsed_mins} นาที)</div>"
 else:
+    # 💡 ถ้าไม่มีออเดอร์ค้าง ให้ประเมินสถานการณ์ใหม่
     sig_norm, reason_norm, setup_norm = sig_norm_raw, reason_norm_raw, setup_norm_raw
+    if "WAIT" not in sig_norm and "CLOSED" not in sig_norm and setup_norm:
+        log_new_trade("Normal Setup", sig_norm, setup_norm, reason_norm, df_m15)
+        # ดึงข้อมูลที่เพิ่งเซฟมาโชว์เวลา
+        new_trade = memory["Normal Setup"]
+        if new_trade:
+            sig_norm = f"⏳ TRACKING: {new_trade['signal']}"
+            reason_norm = f"<b>[สถานะ: กำลังรันออเดอร์ รอชน TP/SL]</b><br>{new_trade['display_reason'].replace('- ', '• ')}"
+            elapsed_mins = int((time.time() - new_trade["timestamp_sec"]) / 60)
+            time_html_norm = f"<div style='font-size:13px; color:#00ccff; margin-top:8px; padding-top:8px; border-top:1px dashed #444;'>🕒 <b>เวลาออก Setup:</b> {new_trade['display_time']} (ผ่านมา {elapsed_mins} นาที)</div>"
 
 # --- โหมด All-In Setup ---
 sig_allin_raw, reason_allin_raw, setup_allin_raw, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed)
+time_html_allin = ""
+
 if memory["All-In Setup"] is not None:
-    sig_allin = f"WAIT (Tracking Active Setup ⏳)"
-    reason_allin = f"กำลังติดตามผล All-In Setup เดิม: {memory['All-In Setup']['signal']}"
-    setup_allin = {}
+    active_allin = memory["All-In Setup"]
+    sig_allin = f"⏳ TRACKING: {active_allin['signal']}"
+    reason_allin = f"<b>[สถานะ: กำลังรันออเดอร์ รอชน TP/SL]</b><br>{active_allin['display_reason'].replace('- ', '• ')}"
+    setup_allin = {'Entry': active_allin['display_entry'], 'SL': active_allin['display_sl'], 'TP': active_allin['display_tp']}
+    elapsed_mins = int((time.time() - active_allin["timestamp_sec"]) / 60)
+    time_html_allin = f"<div style='font-size:13px; color:#ffcc00; margin-top:8px; padding-top:8px; border-top:1px dashed #444;'>🕒 <b>เวลาออก Setup:</b> {active_allin['display_time']} (ผ่านมา {elapsed_mins} นาที)</div>"
 else:
     sig_allin, reason_allin, setup_allin = sig_allin_raw, reason_allin_raw, setup_allin_raw
-
+    if "WAIT" not in sig_allin and "CLOSED" not in sig_allin and setup_allin:
+        log_new_trade("All-In Setup", sig_allin, setup_allin, reason_allin, df_m15)
+        new_allin = memory["All-In Setup"]
+        if new_allin:
+            sig_allin = f"⏳ TRACKING: {new_allin['signal']}"
+            reason_allin = f"<b>[สถานะ: กำลังรันออเดอร์ รอชน TP/SL]</b><br>{new_allin['display_reason'].replace('- ', '• ')}"
+            elapsed_mins = int((time.time() - new_allin["timestamp_sec"]) / 60)
+            time_html_allin = f"<div style='font-size:13px; color:#ffcc00; margin-top:8px; padding-top:8px; border-top:1px dashed #444;'>🕒 <b>เวลาออก Setup:</b> {new_allin['display_time']} (ผ่านมา {elapsed_mins} นาที)</div>"
 
 now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
 current_date_str = now_thai.strftime("%Y-%m-%d")
@@ -721,13 +728,12 @@ col_allin, col_normal = st.columns(2)
 
 with col_allin:
     st.markdown("<h2 class='title-header' style='color: #ffcc00;'>🎯 10-Strike All-In Protocol</h2>", unsafe_allow_html=True)
-    if "ALL-IN" in sig_allin: log_new_trade("All-In Setup", sig_allin, setup_allin, reason_allin, df_m15)
-            
     st.markdown(f"""
     <div class="allin-card">
         <h3 style="margin:0; color:#ffcc00;">{light} All-In Commander</h3>
-        <div style="color:{'#888' if 'CLOSED' in sig_allin else ('#ffcc00' if 'WAIT' in sig_allin else '#00ff00')}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_allin}</div>
+        <div style="color:{'#888' if 'CLOSED' in sig_allin else ('#ffcc00' if 'WAIT' in sig_allin and 'TRACKING' not in sig_allin else '#00ff00')}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_allin}</div>
         <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Logic:</b><br>{reason_allin.replace('<br>', '<br>- ')}</div>
+        {time_html_allin}
     """, unsafe_allow_html=True)
     if setup_allin:
         st.markdown(f"""<div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid #444; margin-top: 15px;"><div style="color:#ffcc00; font-weight:bold; margin-bottom:5px;">🎯 1:2 Geometry Setup:</div><div>📍 <b>Entry:</b> {setup_allin.get('Entry','')}</div><div style="color:#ff4444;">🛑 <b>SL:</b> {setup_allin.get('SL','')}</div><div style="color:#00ff00;">💰 <b>TP:</b> {setup_allin.get('TP','')}</div></div>""", unsafe_allow_html=True)
@@ -740,14 +746,12 @@ with col_allin:
 
 with col_normal:
     st.markdown("<h2 class='title-header' style='color: #00ccff;'>⭐ 5-Star Trade Matrix</h2>", unsafe_allow_html=True)
-    if "WAIT" not in sig_norm and "CLOSED" not in sig_norm and setup_norm: 
-        log_new_trade("Normal Setup", sig_norm, setup_norm, reason_norm, df_m15)
-            
     st.markdown(f"""
     <div class="plan-card">
         <h3 style="margin:0; color:#00ccff;">🃏 Daily Setup (Quant Mode)</h3>
-        <div style="color:{'#ffcc00' if 'WAIT' in sig_norm else '#00ff00'}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_norm}</div>
+        <div style="color:{'#ffcc00' if 'WAIT' in sig_norm and 'TRACKING' not in sig_norm else '#00ff00'}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_norm}</div>
         <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Score & Logic:</b><br>{reason_norm}</div>
+        {time_html_norm}
     """, unsafe_allow_html=True)
     
     if setup_norm:
