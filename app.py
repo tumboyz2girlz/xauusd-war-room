@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.16", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.18", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -202,10 +202,10 @@ def get_categorized_news():
                 polarity = TextBlob(entry.title).sentiment.polarity
                 base_score = abs(polarity) * 5
                 if any(kw in title_lower for kw in ['war', 'missile', 'strike', 'emergency', 'attack']): base_score += 4.0
-                elif any(kw in title_lower for kw in ['fed', 'inflation', 'rate']): base_score += 2.0
+                elif any(kw in title_lower for kw in ['fed', 'inflation', 'rate', 'fomc', 'cpi']): base_score += 2.0
                 final_score = min(10.0, max(1.0, base_score))
                 direction = "⚪ NEUTRAL"
-                if any(w in title_lower for w in ['war', 'missile', 'strike', 'attack', 'escalat']): direction = "🟢 GOLD UP (Safe Haven)"
+                if any(w in title_lower for w in ['war', 'missile', 'strike', 'attack', 'escalat', 'iran', 'houthi']): direction = "🟢 GOLD UP (Safe Haven)"
                 elif any(w in title_lower for w in ['ceasefire', 'peace']): direction = "🔴 GOLD DOWN (Risk-On)"
                 elif any(w in title_lower for w in ['rate hike', 'hawkish']): direction = "🔴 GOLD DOWN (Strong USD)"
                 elif any(w in title_lower for w in ['rate cut', 'dovish']): direction = "🟢 GOLD UP (Weak Econ)"
@@ -240,96 +240,142 @@ def get_breaking_news():
     speed_news.sort(key=lambda x: x['timestamp'], reverse=True)
     return speed_news[:10]
 
-# --- 4. CORE AI (Quant Mindset & 5-Star) ---
-def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news):
+# 💡 V12.18: ฟังก์ชันอัปเกรดคำนวณเทรนด์ให้แม่นยำขึ้น (Price vs EMA12 vs EMA50)
+def identify_trend(df):
+    if df is None or len(df) < 50: return "ไซด์เวย์ ⚪", "SIDEWAY"
+    df['ema12'] = ta.ema(df['close'], length=12)
+    df['ema50'] = ta.ema(df['close'], length=50)
+    c = df.iloc[-1]
+    
+    if c['close'] > c['ema50'] and c['ema12'] > c['ema50']:
+        return "ขาขึ้น 🟢", "UP"
+    elif c['close'] < c['ema50'] and c['ema12'] < c['ema50']:
+        return "ขาลง 🔴", "DOWN"
+    return "ไซด์เวย์ ⚪", "SIDEWAY"
+
+# 💡 V12.18: ฟังก์ชันหาโซนสำคัญของ H4 (HTF Zones)
+def get_h4_zones(df_h4):
+    demand_h4, supply_h4 = [], []
+    if df_h4 is None or len(df_h4) < 20: return demand_h4, supply_h4
+    df_recent = df_h4.tail(60).reset_index(drop=True)
+    for i in range(len(df_recent)-1, 1, -1):
+        if df_recent['low'].iloc[i] > df_recent['high'].iloc[i-2]: # Demand
+            demand_h4.append((df_recent['high'].iloc[i-2], df_recent['low'].iloc[i]))
+        if df_recent['high'].iloc[i] < df_recent['low'].iloc[i-2]: # Supply
+            supply_h4.append((df_recent['low'].iloc[i-2], df_recent['high'].iloc[i]))
+    return demand_h4, supply_h4
+
+# --- 4. CORE AI (V12.18 SMC Master) ---
+def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir):
     if is_market_closed: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, False
         
-    df_h4['ema50'] = ta.ema(df_h4['close'], length=50)
-    df_m15['ema50'] = ta.ema(df_m15['close'], length=50)
     df_m15['atr'] = ta.atr(df_m15['high'], df_m15['low'], df_m15['close'], length=14)
     df_m15['rsi'] = ta.rsi(df_m15['close'], length=14)
     macd = ta.macd(df_m15['close'], fast=12, slow=26, signal=9)
     df_m15 = pd.concat([df_m15, macd], axis=1)
 
-    trend_m15 = "SIDEWAY"
-    if df_m15.iloc[-2]['ema50'] > df_m15.iloc[-3]['ema50']: trend_m15 = "UP"
-    elif df_m15.iloc[-2]['ema50'] < df_m15.iloc[-3]['ema50']: trend_m15 = "DOWN"
-
-    trend_h4 = "SIDEWAY"
-    if df_h4.iloc[-2]['ema50'] > df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] > df_h4.iloc[-4]['ema50']: trend_h4 = "UP"
-    elif df_h4.iloc[-2]['ema50'] < df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] < df_h4.iloc[-4]['ema50']: trend_h4 = "DOWN"
-
     atr = float(df_m15.iloc[-2]['atr'])
-    ema = float(df_m15.iloc[-2]['ema50'])
     rsi = float(df_m15.iloc[-1]['rsi'])
     macd_hist = float(df_m15['MACDh_12_26_9'].iloc[-1]) if 'MACDh_12_26_9' in df_m15 else 0.0
     current_m15 = df_m15.iloc[-1]
     red_body_size = current_m15['open'] - current_m15['close']
-    is_flash_crash = True if (red_body_size >= 15.0) and ((current_m15['close'] - current_m15['low']) <= 3.0) else False
+    
+    # 💡 ปรับ Anti-dump เป็น $30
+    is_flash_crash = True if (red_body_size >= 30.0) and ((current_m15['close'] - current_m15['low']) <= 5.0) else False
+
+    h4_demands, h4_supplies = get_h4_zones(df_h4)
 
     def get_smc_setup(df, trend_dir):
         df_recent = df.tail(40).reset_index(drop=True)
         atr_smc = df_recent['atr'].iloc[-1]
-        if trend_dir == "UP":
+        current_close = df.iloc[-1]['close']
+        mtf_aligned = False
+        
+        if trend_dir == "UP": 
             for i in range(len(df_recent)-1, 1, -1):
-                if df_recent['low'].iloc[i] > df_recent['high'].iloc[i-2]: return True, f"🧲 โซน Demand $ {(df_recent['high'].iloc[i-2]):.2f} - $ {(df_recent['low'].iloc[i]):.2f}", f"$ {(df_recent['low'].iloc[i-2] - (atr_smc * 0.5)):.2f}", f"$ {(df_recent['high'].max()):.2f}"
-        else:
+                if df_recent['low'].iloc[i] > df_recent['high'].iloc[i-2]: 
+                    entry_top = df_recent['low'].iloc[i]
+                    entry_bot = df_recent['high'].iloc[i-2]
+                    sl_val = entry_bot - (atr_smc * 0.5)
+                    tp_val = df_recent['high'].max()
+                    
+                    # 💡 ตรวจสอบว่าโซน FVG ของ M15 ซ้อนทับกับ Demand H4 หรือไม่
+                    for h4_bot, h4_top in h4_demands:
+                        if max(entry_bot, h4_bot) <= min(entry_top, h4_top):
+                            mtf_aligned = True
+                            break
+                            
+                    # ตรวจสอบราคาย่อ (Pullback)
+                    if current_close > entry_top and (current_close - entry_top) < (atr_smc * 2):
+                        return True, f"🧲 โซน Demand FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned
+        elif trend_dir == "DOWN": 
             for i in range(len(df_recent)-1, 1, -1):
-                if df_recent['high'].iloc[i] < df_recent['low'].iloc[i-2]: return True, f"🧲 โซน Supply $ {(df_recent['low'].iloc[i-2]):.2f} - $ {(df_recent['high'].iloc[i]):.2f}", f"$ {(df_recent['high'].iloc[i-2] + (atr_smc * 0.5)):.2f}", f"$ {(df_recent['low'].min()):.2f}"
-        return False, "", "", ""
+                if df_recent['high'].iloc[i] < df_recent['low'].iloc[i-2]: 
+                    entry_bot = df_recent['high'].iloc[i]
+                    entry_top = df_recent['low'].iloc[i-2]
+                    sl_val = entry_top + (atr_smc * 0.5)
+                    tp_val = df_recent['low'].min()
+                    
+                    # 💡 ตรวจสอบว่าโซน FVG ของ M15 ซ้อนทับกับ Supply H4 หรือไม่
+                    for h4_bot, h4_top in h4_supplies:
+                        if max(entry_bot, h4_bot) <= min(entry_top, h4_top):
+                            mtf_aligned = True
+                            break
+                            
+                    if current_close < entry_bot and (entry_bot - current_close) < (atr_smc * 2):
+                        return True, f"🧲 โซน Supply FVG $ {entry_bot:.2f} - $ {entry_top:.2f}", f"$ {sl_val:.2f}", f"$ {tp_val:.2f}", mtf_aligned
+        return False, "", "", "", False
 
-    smc_found, smc_entry, smc_sl, smc_tp = get_smc_setup(df_m15, trend_m15)
+    smc_found, smc_entry, smc_sl, smc_tp, is_mtf_aligned = get_smc_setup(df_m15, trend_m15_dir)
     
-    # --- 🚨 ระบบป้องกันข่าวกล่องแดง ---
     news_warning = ""
     is_news_danger = False
     if next_red_news:
         hrs = next_red_news['hours']
         if -0.5 <= hrs <= 0.5:
             is_news_danger = True
-            news_warning = f"\n🚨 **DANGER (ระงับเทรด):** งดเข้าออเดอร์ ข่าวสำคัญ '{next_red_news['title']}' กำลังจะประกาศ!"
+            news_warning = f"\n🚨 **DANGER (ระงับเทรด):** ข่าวสำคัญ '{next_red_news['title']}' กำลังจะประกาศ!"
         elif 0.5 < hrs <= 3.0:
-            news_warning = f"\n⚠️ **WARNING (ลดความเสี่ยง):** ข่าว '{next_red_news['title']}' จะออกใน {hrs:.1f} ชม. แนะนำลด Position Size"
+            news_warning = f"\n⚠️ **WARNING (ลดความเสี่ยง):** ข่าว '{next_red_news['title']}' จะออกใน {hrs:.1f} ชม."
 
     if is_flash_crash:
         setup = {'Entry': f"กด Sell ทันที หรือรอเด้งโซน $ {(current_m15['close'] + (0.5*atr)):.2f}", 'SL': f"$ {(current_m15['open'] + (0.5*atr)):.2f}", 'TP': f"$ {(current_m15['close'] - (3*atr)):.2f}"}
-        return "🚨 FLASH CRASH (SELL NOW!)", f"เกิดแรงเทขายผิดปกติ $ {red_body_size:.2f} สั่งแทง SELL ตามน้ำ!{news_warning}", setup, True
+        return "🚨 FLASH CRASH (SELL NOW!)", f"เกิดแรงเทขายผิดปกติระดับ 30$ สั่งแทง SELL ตามน้ำ!{news_warning}", setup, True
 
     if is_news_danger: return "WAIT (News Danger 🛑)", f"ระบบระงับการเข้าเทรดเพื่อหลีกเลี่ยงความผันผวนของข่าว{news_warning}", {}, False
-    if trend_m15 == "SIDEWAY": return "WAIT", f"โครงสร้าง M15 ยังเป็นการพักตัว (Consolidation) รอยืนยันเทรนด์{news_warning}", {}, False
+    if not smc_found: return "WAIT", f"ยังไม่พบโซนย่อตัว (Pullback/FVG) ใน M15 รอราคาสร้างฐาน{news_warning}", {}, False
     
     # --- ⭐ ระบบประเมิน 5 ดาว (Quant Matrix) ---
-    stars = 1 
-    logic_details = [f"⭐ M15 มีโครงสร้างเทรนด์ {trend_m15} ชัดเจน"]
+    stars = 2 # ให้ 2 ดาวเป็นฐาน เพราะเจอ FVG
+    logic_details = [f"⭐ M15 พบจุดเข้า Buy on Dip / Sell on Rally (FVG)"]
     
-    if trend_m15 == trend_h4:
-        stars += 1; logic_details.append("⭐ ไทม์เฟรมใหญ่ (H4) สอดคล้องกับไทม์เฟรมเล็ก (M15)")
-    else: logic_details.append("➖ H4 ขัดแย้งกับ M15 (แนะนำเทรดเก็บสั้น)")
+    if trend_m15_dir == trend_h4_dir:
+        stars += 1; logic_details.append("⭐ เทรนด์ H4 สนับสนุนทิศทาง M15")
+    else: logic_details.append("➖ H4 ขัดแย้งกับ M15 (เป็นการเทรด Pullback สั้นๆ)")
+
+    if is_mtf_aligned:
+        stars += 1; logic_details.append("🔥 โซน FVG ซ้อนทับกับแนวรับ/ต้าน ของ H4 (High Probability!)")
 
     dxy_trend = metrics['DXY'][1]
-    if (trend_m15 == "UP" and dxy_trend < 0) or (trend_m15 == "DOWN" and dxy_trend > 0):
+    if (trend_m15_dir == "UP" and dxy_trend < 0) or (trend_m15_dir == "DOWN" and dxy_trend > 0):
         stars += 1; logic_details.append("⭐ ดัชนี DXY เคลื่อนไหวสนับสนุนทิศทางทองคำ")
-    else: logic_details.append("➖ ดัชนี DXY ไม่ได้สนับสนุนทิศทาง")
 
     retail_short, retail_long = sentiment.get('short', 50), sentiment.get('long', 50)
-    if (trend_m15 == "UP" and retail_short > 60) or (trend_m15 == "DOWN" and retail_long > 60):
+    if (trend_m15_dir == "UP" and retail_short > 60) or (trend_m15_dir == "DOWN" and retail_long > 60):
         stars += 1; logic_details.append("⭐ รายย่อยเทน้ำหนักฝั่งตรงข้าม (เทรดล่าสภาพคล่อง)")
-    else: logic_details.append("➖ สัดส่วนรายย่อยยังไม่เทไปฝั่งใดฝั่งหนึ่ง")
 
-    if (trend_m15 == "UP" and macd_hist > 0) or (trend_m15 == "DOWN" and macd_hist < 0):
-        stars += 1; logic_details.append("⭐ โมเมนตัม MACD สนับสนุนทิศทาง")
-
+    stars = min(5, stars)
     star_str = "⭐" * stars
     logic_str = "<br>".join(logic_details) + news_warning
 
-    if trend_m15 == "UP":
-        if rsi > 70: return f"WAIT (Overbought)", f"RSI = {rsi:.1f} เข้าเขต Overbought ห้ามไล่ราคา ฝืนโมเมนตัม! รอราคาย่อตัว{news_warning}", {}, False
-        setup = {'Entry': smc_entry if smc_found else f"🎯 โซน EMA $ {(ema-(0.5*atr)):.2f} - $ {ema:.2f}", 'SL': smc_sl if smc_found else f"$ {(ema-(2*atr)):.2f}", 'TP': smc_tp if smc_found else f"$ {(ema+(2*atr)):.2f}"}
+    if trend_m15_dir == "UP":
+        if rsi > 70: return f"WAIT (Overbought)", f"RSI = {rsi:.1f} เข้าเขต Overbought ห้ามไล่ราคา! รอราคาย่อลงมาในโซน{news_warning}", {}, False
+        setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
         return f"BUY {star_str}", logic_str, setup, False
         
-    elif trend_m15 == "DOWN":
-        if rsi < 30: return f"WAIT (Oversold)", f"RSI = {rsi:.1f} เข้าเขต Oversold ห้ามไล่ราคาขาย! รอราคาเด้งกลับขึ้นมา{news_warning}", {}, False
-        setup = {'Entry': smc_entry if smc_found else f"🎯 โซน EMA $ {ema:.2f} - $ {(ema+(0.5*atr)):.2f}", 'SL': smc_sl if smc_found else f"$ {(ema+(2*atr)):.2f}", 'TP': smc_tp if smc_found else f"$ {(ema-(2*atr)):.2f}"}
+    elif trend_m15_dir == "DOWN":
+        if rsi < 30: return f"WAIT (Oversold)", f"RSI = {rsi:.1f} เข้าเขต Oversold ห้ามไล่ราคาขาย! รอราคาเด้งกลับ{news_warning}", {}, False
+        setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
         return f"SELL {star_str}", logic_str, setup, False
 
     return "WAIT", "รอ...", {}, False
@@ -362,18 +408,17 @@ def calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_
         if gcf_trend < 0: return "WAIT", "GC=F Premium ไม่สนับสนุนทิศทาง", {}, "🟢"
         if sentiment['short'] < 75.0: return "WAIT", f"รายย่อยยังสะสมฝั่ง Short ไม่พอ ({sentiment['short']}%)", {}, "🟢"
         entry, sl = current_price - 1.0, max(sweep_price - 0.5, current_price - 4.0)
-        return "ALL-IN BUY 🚀", f"Confluence ครบ 100% รอเข้าซื้อจังหวะย่อ", {'Entry': f"🎯 โซน $ {(entry-1.0):.2f} - $ {entry:.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry + ((entry - sl) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
+        return "ALL-IN BUY 🚀", f"Confluence ครบ 100% เกิด CHoCH ดักรอเข้าซื้อ", {'Entry': f"🎯 โซน $ {(entry-1.0):.2f} - $ {entry:.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry + ((entry - sl) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
         
     elif direction == "SELL":
         if dxy_trend < 0: return "WAIT", "DXY ยังอ่อนค่า (ขัดแย้งกับสัญญาณ)", {}, "🟢"
         if gcf_trend > 0: return "WAIT", "GC=F Premium ไม่สนับสนุนทิศทาง", {}, "🟢"
         if sentiment['long'] < 75.0: return "WAIT", f"รายย่อยยังสะสมฝั่ง Buy ไม่พอ ({sentiment['long']}%)", {}, "🟢"
         entry, sl = current_price + 1.0, min(sweep_price + 0.5, current_price + 4.0)
-        return "ALL-IN SELL 🚀", f"Confluence ครบ 100% รอเทขายจังหวะเด้ง", {'Entry': f"🎯 โซน $ {entry:.2f} - $ {(entry+1.0):.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry - ((sl - entry) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
+        return "ALL-IN SELL 🚀", f"Confluence ครบ 100% เกิด CHoCH ดักรอเทขาย", {'Entry': f"🎯 โซน $ {entry:.2f} - $ {(entry+1.0):.2f}", 'SL': f"$ {sl:.2f}", 'TP': f"$ {(entry - ((sl - entry) * 2)):.2f}", 'Sweep': f"$ {sweep_price:.2f}"}, "🟢"
 
     return "WAIT", "รอ...", {}, light
 
-# 💡 ฟังก์ชันควบคุม EA Commander (Quant Style)
 def get_ea_commander_status(trend_m15_str, trend_h4_str, is_flash_crash, rsi):
     if is_flash_crash:
         return "🚨 HARD CUT (ปิด EA ทันที!)", "ตรวจพบความผันผวนรุนแรง (High Variance) ปิด EA เพื่อรักษาเงินทุน ห้ามถัวเด็ดขาด!", "#ff3333"
@@ -386,23 +431,18 @@ def get_ea_commander_status(trend_m15_str, trend_h4_str, is_flash_crash, rsi):
     
     return "🟢 TREND FOLLOWING (FULL GRID)", f"โครงสร้าง H4 และ M15 สอดคล้องกัน ({trend_m15_str}) กาง Grid ดักตามเทรนด์ได้เต็มกำลัง", "#00ff00"
 
-# 🧮 ฟังก์ชันคำนวณคณิตศาสตร์ (EV & RR)
 def calculate_ev_stats(entry_str, sl_str, tp_str, stars):
     def get_num(s):
         nums = [float(x) for x in re.findall(r'\d+\.\d+', str(s).replace(',', ''))]
         return sum(nums)/len(nums) if nums else 0.0
-        
     entry, sl, tp = get_num(entry_str), get_num(sl_str), get_num(tp_str)
     if entry == 0 or sl == 0 or tp == 0: return 0, 0, 0, 0, 0
-    
     risk = abs(entry - sl)
     reward = abs(tp - entry)
     if risk == 0: risk = 0.001
     rr = reward / risk
-    
     win_rates = {5: 0.80, 4: 0.65, 3: 0.50, 2: 0.35, 1: 0.20}
     wr = win_rates.get(stars, 0.50)
-    
     ev_r = (wr * rr) - ((1 - wr) * 1)
     return risk, reward, rr, wr*100, ev_r
 
@@ -417,18 +457,13 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
         trade_id = f"TRD-{int(time.time())}"
         thai_dt_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=7)).strftime("%d %b %Y | %H:%M น.")
         now_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S")
-        
-        # 💡 ลบ <br> ออกเพื่อให้ TG แสดงผลสวยงาม
         clean_reason = re.sub('<[^<]+>', '\n- ', reason_text).strip()
         if clean_reason.startswith("- "): clean_reason = clean_reason[2:]
 
         is_long = "BUY" in sig
-        stars_count = sig.count("⭐") if "⭐" in sig else 5 # ALL-IN ตีเป็น 5 ดาว
+        stars_count = sig.count("⭐") if "⭐" in sig else 5 
         
-        # ดึงราคาและคำนวณ EV
-        entry_str = setup_data.get('Entry', '')
-        sl_str = setup_data.get('SL', '')
-        tp_str = setup_data.get('TP', '')
+        entry_str, sl_str, tp_str = setup_data.get('Entry', ''), setup_data.get('SL', ''), setup_data.get('TP', '')
         risk, reward, rr, wr_pct, ev_r = calculate_ev_stats(entry_str, sl_str, tp_str, stars_count)
 
         def extract_price(t, is_long, is_entry):
@@ -456,30 +491,20 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
         if fig:
             try: 
                 fig.write_image(img_path)
-                time.sleep(1) # รอให้เซฟไฟล์เสร็จ
+                time.sleep(1) 
             except Exception as img_e: 
-                print("Image Gen Error:", img_e)
                 img_path = None
 
-        # 💡 อัปเกรด Template Telegram แบบ Quant
-        tg_msg = f"🎯 [NEW SETUP] แจ้งเตือนจุดเข้า!\n"
-        tg_msg += f"⏰ เวลาออก Setup: {thai_dt_str}\n\n"
-        tg_msg += f"Mode: {setup_type}\n"
-        tg_msg += f"Signal: {sig}\n\n"
-        tg_msg += f"📍 Entry: {entry_str}\n"
+        tg_msg = f"🎯 [NEW SETUP] แจ้งเตือนจุดเข้า!\n⏰ เวลาออก Setup: {thai_dt_str}\n\nMode: {setup_type}\nSignal: {sig}\n\n📍 Entry: {entry_str}\n"
         if risk > 0:
-            tg_msg += f"🛑 SL: {sl_str} (Risk = ${risk:.2f})\n"
-            tg_msg += f"💰 TP: {tp_str} (Reward = ${reward:.2f})\n"
-            tg_msg += f"🧮 Risk:Reward: 1:{rr:.2f}\n\n"
+            tg_msg += f"🛑 SL: {sl_str} (Risk = ${risk:.2f})\n💰 TP: {tp_str} (Reward = ${reward:.2f})\n🧮 Risk:Reward: 1:{rr:.2f}\n\n"
         else:
             tg_msg += f"🛑 SL: {sl_str}\n💰 TP: {tp_str}\n\n"
             
         tg_msg += f"❓ Why?:\n- {clean_reason}\n\n"
-        
         if risk > 0:
             ev_status = "Positive EV คุ้มค่าที่จะเสี่ยง! ✅" if ev_r > 0 else "Negative EV ความเสี่ยงสูง ⚠️"
-            tg_msg += f"🎲 Implied Win Rate: {int(wr_pct)}% (ระดับ {stars_count} ดาว)\n"
-            tg_msg += f"📈 Expected Value (EV): {ev_r:+.2f} R ({ev_status})"
+            tg_msg += f"🎲 Implied Win Rate: {int(wr_pct)}% (ระดับ {stars_count} ดาว)\n📈 Expected Value (EV): {ev_r:+.2f} R ({ev_status})"
 
         send_telegram_notify(tg_msg, img_path)
     except Exception as e: print("Log Error:", e)
@@ -578,22 +603,12 @@ speed_news = get_breaking_news()
 
 if not is_market_closed and df_m15 is not None: check_pending_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
-trend_h4_str = "ไซด์เวย์ ⚪"
-if df_h4 is not None and len(df_h4) >= 4:
-    df_h4['ema50'] = ta.ema(df_h4['close'], length=50)
-    if df_h4.iloc[-2]['ema50'] > df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] > df_h4.iloc[-4]['ema50']: trend_h4_str = "ขาขึ้น 🟢"
-    elif df_h4.iloc[-2]['ema50'] < df_h4.iloc[-3]['ema50'] and df_h4.iloc[-3]['ema50'] < df_h4.iloc[-4]['ema50']: trend_h4_str = "ขาลง 🔴"
+# 💡 V12.18: ใช้ฟังก์ชันวิเคราะห์เทรนด์ใหม่
+trend_h4_str, trend_h4_dir = identify_trend(df_h4)
+trend_m15_str, trend_m15_dir = identify_trend(df_m15)
+current_rsi = float(df_m15.iloc[-1]['rsi']) if df_m15 is not None and len(df_m15) > 15 else 50.0
 
-trend_m15_str = "ไซด์เวย์ ⚪"
-current_rsi = 50.0
-if df_m15 is not None and len(df_m15) >= 3:
-    df_m15['ema50'] = ta.ema(df_m15['close'], length=50)
-    df_m15['rsi'] = ta.rsi(df_m15['close'], length=14)
-    current_rsi = float(df_m15.iloc[-1]['rsi'])
-    if df_m15.iloc[-2]['ema50'] > df_m15.iloc[-3]['ema50']: trend_m15_str = "ขาขึ้น 🟢"
-    elif df_m15.iloc[-2]['ema50'] < df_m15.iloc[-3]['ema50']: trend_m15_str = "ขาลง 🔴"
-
-sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news)
+sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir)
 sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed)
 
 now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
@@ -639,6 +654,7 @@ with c5: st.metric("SPDR Flow", st.session_state.spdr_manual)
 with c6: st.metric("Retail Senti.", f"S:{sentiment.get('short',50)}%", f"L:{sentiment.get('long',50)}%", delta_color="off")
 
 st.markdown(f"<div style='text-align: center; color: {'#ff4444' if is_market_closed else '#00ff00'}; font-size: 14px; margin-top: -5px; margin-bottom: 15px;'>{status_msg}</div>", unsafe_allow_html=True)
+
 st.markdown(f"<div class='exec-summary'>{generate_exec_summary(trend_h4_str, trend_m15_str, metrics, next_red_news, sentiment)}</div>", unsafe_allow_html=True)
 
 if is_market_closed: 
@@ -728,6 +744,7 @@ else:
     with tab_chart_dxy: st.components.v1.html(get_tv_html("CAPITALCOM:DXY", 400), height=400)
     display_intelligence()
 
+# --- 9. TELEGRAM INTERACTIVE LISTENER (MENTION HANDLER) ---
 def handle_telegram_mentions(metrics, df_h4, df_m15, sentiment, final_news_list, war_news, setup_norm, trend_h4_str, trend_m15_str, spdr_val):
     last_update_id = st.session_state.get('last_tg_update_id', 0)
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
@@ -742,11 +759,11 @@ def handle_telegram_mentions(metrics, df_h4, df_m15, sentiment, final_news_list,
                         if "/status" in msg_text or "ราคา" in msg_text: send_telegram_notify(f"🦅 กวักทองรายงานตัวครับ!\n\n🥇 Gold: ${metrics['GOLD'][0]:,.2f} ({metrics['GOLD'][1]:.2f}%)\n💵 DXY: {metrics['DXY'][0]:,.2f}\n🏦 SPDR: {spdr_val}\n🐑 Sentiment: S:{sentiment['short']}% | L:{sentiment['long']}%")
                         elif "/brief" in msg_text or "สรุป" in msg_text: send_telegram_notify(generate_telegram_us_briefing(trend_h4_str, trend_m15_str, metrics, sentiment, final_news_list, war_news, spdr_val))
                         elif "/chart" in msg_text or "กราฟ" in msg_text:
-                            img_path = "manual_chart.png"
-                            fig = plot_setup_chart(df_m15, setup_norm)
-                            if fig:
-                                fig.write_image(img_path)
-                                send_telegram_notify("📊 นี่คือกราฟ XAUUSD ล่าสุดพร้อมโซน SMC ครับ", img_path)
+                            if setup_norm and isinstance(setup_norm, dict) and "Entry" in setup_norm:
+                                msg = f"🎯 [Current Setup Focus]\n\n📍 Entry: {setup_norm.get('Entry')}\n🛑 SL: {setup_norm.get('SL')}\n💰 TP: {setup_norm.get('TP')}\n\n*(ระบบรันบน Cloud ปิดโหมดรูปภาพเพื่อความเสถียรครับ)*"
+                                send_telegram_notify(msg)
+                            else:
+                                send_telegram_notify("📡 ตอนนี้ตลาดยังไม่มี Setup ที่ชัดเจนครับ แนะนำให้ WAIT ไปก่อน")
     except Exception as e: pass
 
 if not is_market_closed and df_m15 is not None: handle_telegram_mentions(metrics, df_h4, df_m15, sentiment, final_news_list, war_news, setup_norm, trend_h4_str, trend_m15_str, st.session_state.spdr_manual)
