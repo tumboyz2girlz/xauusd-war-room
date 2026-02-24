@@ -17,14 +17,11 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.20", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.22", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
 if 'spdr_manual' not in st.session_state: st.session_state.spdr_manual = "Neutral"
-if 'last_logged_setup' not in st.session_state: st.session_state.last_logged_setup = ""
-if 'pending_trades' not in st.session_state: st.session_state.pending_trades = []
-if 'log_history' not in st.session_state: st.session_state.log_history = {} 
 if 'last_us_open_summary_date' not in st.session_state: st.session_state.last_us_open_summary_date = ""
 
 # ⚠️ URL Firebase และ Google Sheet
@@ -64,7 +61,7 @@ def send_telegram_notify(msg, image_path=None):
         try: requests.post(url, json=data, timeout=5)
         except: pass
 
-# --- 2. DATA ENGINE (🛡️ Safe Mode) ---
+# --- 2. DATA ENGINE ---
 @st.cache_data(ttl=30)
 def get_market_data():
     metrics = {'GOLD': (0.0, 0.0), 'GC_F': (0.0, 0.0), 'DXY': (0.0, 0.0), 'US10Y': (0.0, 0.0)}
@@ -125,12 +122,10 @@ def check_market_status(df_m15):
 def get_current_session():
     now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     h = now_thai.hour
-    sessions = []
-    if 5 <= h < 14: sessions.append("🌏 Asia Session")
-    if 14 <= h < 23: sessions.append("💶 Europe/London Session")
-    if h >= 19 or h < 4: sessions.append("🗽 US/New York Session")
-    if not sessions: return "🌙 Market Transition"
-    return " | ".join(sessions)
+    if 5 <= h < 14: return "🌏 Asia Session"
+    if 14 <= h < 23: return "💶 Europe/London Session"
+    if h >= 19 or h < 4: return "🗽 US/New York Session"
+    return "🌙 Market Transition"
 
 # --- 3. FOREXFACTORY & SCRAPERS ---
 @st.cache_data(ttl=900)
@@ -235,7 +230,6 @@ def get_breaking_news():
     speed_news.sort(key=lambda x: x['timestamp'], reverse=True)
     return speed_news[:10]
 
-# 💡 V12.18: ฟังก์ชันอัปเกรดคำนวณเทรนด์ให้แม่นยำขึ้น
 def identify_trend(df):
     if df is None or df.empty or len(df) < 50: return "ไซด์เวย์ ⚪", "SIDEWAY"
     try:
@@ -248,10 +242,9 @@ def identify_trend(df):
             if pd.notna(curr_ema12) and pd.notna(curr_ema50):
                 if curr_close > curr_ema50 and curr_ema12 > curr_ema50: return "ขาขึ้น 🟢", "UP"
                 elif curr_close < curr_ema50 and curr_ema12 < curr_ema50: return "ขาลง 🔴", "DOWN"
-    except Exception as e: print("Identify Trend Error:", e)
+    except: pass
     return "ไซด์เวย์ ⚪", "SIDEWAY"
 
-# 💡 V12.18: ฟังก์ชันหาโซนสำคัญของ H4
 def get_h4_zones(df_h4):
     demand_h4, supply_h4 = [], []
     if df_h4 is None or len(df_h4) < 20: return demand_h4, supply_h4
@@ -274,7 +267,65 @@ def detect_choch_and_sweep(df):
     if recent['high'].iloc[-5:-1].max() > highest_high and current_close < recent['low'].iloc[-5:-1].min(): return True, "SELL", recent['high'].iloc[-5:-1].max(), current_close
     return False, "", 0, 0
 
-# --- 4. CORE AI (V12.18 SMC Master) ---
+# --- 🧠 THE "ONE SHOT, ONE KILL" MEMORY SYSTEM ---
+@st.cache_resource
+def get_trade_memory():
+    # โครงสร้างความจำ: "Normal Setup": {...ข้อมูล...}, "All-In Setup": {...ข้อมูล...}
+    return {"Normal Setup": None, "All-In Setup": None}
+
+def check_active_trades(current_high, current_low):
+    if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
+    memory = get_trade_memory()
+    
+    for mode in ["Normal Setup", "All-In Setup"]:
+        trade = memory[mode]
+        if trade is None: continue
+        
+        is_long = "BUY" in trade['signal']
+        
+        # ตรวจสอบการชน Entry (Activate)
+        if not trade['activated']:
+            if is_long and current_low <= trade['entry_val']: trade['activated'] = True
+            elif not is_long and current_high >= trade['entry_val']: trade['activated'] = True
+            
+        # ถ้าเข้าออเดอร์แล้ว ให้เช็คการชน TP/SL
+        if trade['activated']:
+            result = None
+            if is_long:
+                if current_low <= trade['sl_val']: result = "Lose / SL ❌"
+                elif current_high >= trade['tp_val']: result = "Win / TP ✅"
+            else:
+                if current_high >= trade['sl_val']: result = "Lose / SL ❌"
+                elif current_low <= trade['tp_val']: result = "Win / TP ✅"
+                
+            if result:
+                # 1. ส่งข้อมูลอัปเดตกลับไปที่ Google Sheet
+                try: requests.post(GOOGLE_SHEET_API_URL, json={"action": "update", "id": trade['id'], "result": result}, timeout=3)
+                except: pass
+                
+                # 2. ส่งแจ้งเตือนสรุปผลลัพธ์เข้า Telegram แบบเต็มยศ
+                tg_msg = f"🏁 [RESULT] สรุปผล Setup!\n\n"
+                tg_msg += f"Mode: {mode}\nSignal: {trade['signal']}\n\n"
+                tg_msg += f"📍 Entry: {trade['display_entry']}\n"
+                tg_msg += f"🛑 SL: {trade['display_sl']}\n"
+                tg_msg += f"💰 TP: {trade['display_tp']}\n"
+                if trade['rr'] > 0: tg_msg += f"🧮 Risk:Reward: 1:{trade['rr']:.2f}\n\n"
+                else: tg_msg += "\n"
+                
+                tg_msg += f"❓ Why?:\n- {trade['display_reason']}\n\n"
+                if trade['rr'] > 0:
+                    ev_status = "Positive EV ✅" if trade['ev_r'] > 0 else "Negative EV ⚠️"
+                    tg_msg += f"🎲 Implied Win Rate: {trade['wr_pct']}%\n"
+                    tg_msg += f"📈 Expected Value (EV): {trade['ev_r']:+.2f} R ({ev_status})\n\n"
+                    
+                tg_msg += f"⚡ **Result: {result}**"
+                
+                send_telegram_notify(tg_msg)
+                
+                # 3. ลบออเดอร์เก่าทิ้ง (เคลียร์สมอง) เพื่อรับ Setup ถัดไป
+                memory[mode] = None
+
+# --- 4. CORE AI ---
 def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir):
     if is_market_closed or df_m15 is None or len(df_m15) < 50: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, False
     
@@ -440,17 +491,16 @@ def calculate_ev_stats(entry_str, sl_str, tp_str, stars):
     win_rates = {5: 0.80, 4: 0.65, 3: 0.50, 2: 0.35, 1: 0.20}
     wr = win_rates.get(stars, 0.50)
     ev_r = (wr * rr) - ((1 - wr) * 1)
-    return risk, reward, rr, wr*100, ev_r
+    return risk, reward, rr, int(wr*100), ev_r
 
 def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
     if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
-    hist = st.session_state.log_history.get(setup_type)
-    now = time.time()
-    if hist and (now - hist['time'] < 3600) and hist['signal'] == sig: return
-    st.session_state.log_history[setup_type] = {'time': now, 'signal': sig}
+    
+    memory = get_trade_memory()
     
     try:
-        trade_id = f"TRD-{int(time.time())}"
+        now = time.time()
+        trade_id = f"TRD-{int(now)}"
         thai_dt_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=7)).strftime("%d %b %Y | %H:%M น.")
         now_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S")
         clean_reason = re.sub('<[^<]+>', '\n- ', reason_text).strip()
@@ -474,21 +524,36 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
         tp_val = extract_price(tp_str, False, False)
         is_market = "NOW" in sig 
 
+        # 🧠 บันทึก Trade ลงใน RAM (Memory) 
+        trade_dict = {
+            "id": trade_id,
+            "signal": sig,
+            "display_entry": entry_str,
+            "display_sl": sl_str,
+            "display_tp": tp_str,
+            "display_reason": clean_reason,
+            "rr": rr,
+            "wr_pct": wr_pct,
+            "ev_r": ev_r,
+            "entry_val": entry_val,
+            "sl_val": sl_val,
+            "tp_val": tp_val,
+            "activated": is_market
+        }
+        memory[setup_type] = trade_dict
+
+        # ส่งขึ้น Google Sheet (Pending)
         payload = {"action": "log", "id": trade_id, "timestamp": now_str, "setup_type": setup_type, "signal": sig, "entry": entry_str, "sl": sl_str, "tp": tp_str, "reason": clean_reason}
-        internal_trade = payload.copy()
-        internal_trade['activated'], internal_trade['entry_val'], internal_trade['sl_val'], internal_trade['tp_val'] = is_market, entry_val, sl_val, tp_val
-        internal_trade['display_time'], internal_trade['display_entry'], internal_trade['display_tp'], internal_trade['display_sl'], internal_trade['display_reason'] = thai_dt_str, entry_str, tp_str, sl_str, clean_reason
-
         requests.post(GOOGLE_SHEET_API_URL, json=payload, timeout=3)
-        st.session_state.pending_trades.append(internal_trade)
-
+        
+        # ส่งแจ้งเตือน Telegram
         img_path = "setup_chart.png"
         fig = plot_setup_chart(df_m15, setup_data, mode="All-In" if "All-In" in setup_type else "Normal")
         if fig:
             try: 
                 fig.write_image(img_path)
                 time.sleep(1) 
-            except Exception as img_e: 
+            except: 
                 img_path = None
 
         tg_msg = f"🎯 [NEW SETUP] แจ้งเตือนจุดเข้า!\n⏰ เวลาออก Setup: {thai_dt_str}\n\nMode: {setup_type}\nSignal: {sig}\n\n📍 Entry: {entry_str}\n"
@@ -502,34 +567,6 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
 
         send_telegram_notify(tg_msg, img_path)
     except Exception as e: print("Log Error:", e)
-
-def check_pending_trades(current_high, current_low):
-    if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
-    trades_to_remove = []
-    for trade in st.session_state.pending_trades:
-        entry_p, sl_p, tp_p = trade.get('entry_val', 0.0), trade.get('sl_val', 0.0), trade.get('tp_val', 0.0)
-        if entry_p == 0.0 or sl_p == 0.0 or tp_p == 0.0: continue
-        is_long = "BUY" in trade['signal']
-        if not trade.get('activated', False):
-            if is_long and current_low <= entry_p: trade['activated'] = True
-            elif not is_long and current_high >= entry_p: trade['activated'] = True
-
-        if trade.get('activated', False):
-            result = None
-            if is_long:
-                if current_low <= sl_p: result = "LOSS ❌"
-                elif current_high >= tp_p: result = "WIN 🎯"
-            else:
-                if current_high >= sl_p: result = "LOSS ❌"
-                elif current_low <= tp_p: result = "WIN 🎯"
-            if result:
-                try: requests.post(GOOGLE_SHEET_API_URL, json={"action": "update", "id": trade['id'], "result": result}, timeout=3)
-                except: pass
-                tg_msg = f"🏁 [RESULT] {trade.get('display_time', '')}\nSignal: {trade.get('signal', '')}\nEntry: {trade.get('display_entry', '')}\n✨ Result: {result}"
-                send_telegram_notify(tg_msg)
-                trades_to_remove.append(trade)
-    for t in trades_to_remove:
-        if t in st.session_state.pending_trades: st.session_state.pending_trades.remove(t)
 
 def generate_exec_summary(trend_h4_str, trend_m15_str, metrics, next_red_news, sentiment):
     dxy_status = "อ่อนค่า (หนุนทอง)" if metrics['DXY'][1] < 0 else "แข็งค่า (กดดันทอง)"
@@ -571,19 +608,6 @@ def plot_setup_chart(df, setup_dict, mode="Normal"):
     fig.update_layout(template='plotly_dark', margin=dict(l=10, r=50, t=10, b=10), height=350, xaxis_rangeslider_visible=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     return fig
 
-def get_setup_time_html(setup_type, current_sig, base_color):
-    hist = st.session_state.log_history.get(setup_type)
-    if hist and hist['signal'] == current_sig:
-        utc_dt = datetime.datetime.utcfromtimestamp(hist['time'])
-        thai_dt = utc_dt + datetime.timedelta(hours=7)
-        elapsed_mins = int((time.time() - hist['time']) / 60)
-        is_stale = elapsed_mins >= 45
-        warn_color = "#ff4444" if is_stale else base_color
-        warn_icon = "⚠️" if is_stale else "🕒"
-        warn_text = f" ({elapsed_mins} นาทีที่แล้ว - ระวัง! โซนอาจโดนใช้ไปแล้ว)" if is_stale else f" (อัปเดตเมื่อ {elapsed_mins} นาทีที่แล้ว)"
-        return f"<div style='font-size:13px; color:{warn_color}; margin-top:8px; padding-top:8px; border-top:1px dashed #444;'>{warn_icon} <b>เวลาอัปเดต Setup:</b> {thai_dt.strftime('%d %b | %H:%M น.')} {warn_text}</div>"
-    return ""
-
 # --- UI MAIN ---
 metrics, df_m15, df_h4, mt5_news = get_market_data()
 is_market_closed, status_msg = check_market_status(df_m15)
@@ -595,13 +619,13 @@ sentiment = get_retail_sentiment()
 pol_news, war_news = get_categorized_news() 
 speed_news = get_breaking_news()
 
-if not is_market_closed and df_m15 is not None: check_pending_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
+# 🧠 ระบบตรวจสอบออเดอร์ค้าง (Tracking System)
+if not is_market_closed and df_m15 is not None: 
+    check_active_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
 
-# 💡 V12.19: วิเคราะห์เทรนด์แบบไร้ Error
 trend_h4_str, trend_h4_dir = identify_trend(df_h4)
 trend_m15_str, trend_m15_dir = identify_trend(df_m15)
 
-# 💡 V12.19: คำนวณ RSI ปลอดภัย 100%
 current_rsi = 50.0
 try:
     if df_m15 is not None and len(df_m15) > 15:
@@ -612,8 +636,27 @@ try:
 except: pass
 st.session_state.rsi = current_rsi 
 
-sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir)
-sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed)
+# 🧠 คำนวณ Setup ใหม่ แต่จะถูก Block ถ้ามีออเดอร์ค้าง
+memory = get_trade_memory()
+
+# --- โหมด Normal Setup ---
+sig_norm_raw, reason_norm_raw, setup_norm_raw, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir)
+if memory["Normal Setup"] is not None:
+    sig_norm = f"WAIT (Tracking Active Setup ⏳)"
+    reason_norm = f"กำลังติดตามผล Setup เดิม: {memory['Normal Setup']['signal']}\nหากชน TP หรือ SL ระบบถึงจะค้นหาจุดเข้าใหม่"
+    setup_norm = {}
+else:
+    sig_norm, reason_norm, setup_norm = sig_norm_raw, reason_norm_raw, setup_norm_raw
+
+# --- โหมด All-In Setup ---
+sig_allin_raw, reason_allin_raw, setup_allin_raw, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed)
+if memory["All-In Setup"] is not None:
+    sig_allin = f"WAIT (Tracking Active Setup ⏳)"
+    reason_allin = f"กำลังติดตามผล All-In Setup เดิม: {memory['All-In Setup']['signal']}"
+    setup_allin = {}
+else:
+    sig_allin, reason_allin, setup_allin = sig_allin_raw, reason_allin_raw, setup_allin_raw
+
 
 now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
 current_date_str = now_thai.strftime("%Y-%m-%d")
@@ -678,17 +721,13 @@ col_allin, col_normal = st.columns(2)
 
 with col_allin:
     st.markdown("<h2 class='title-header' style='color: #ffcc00;'>🎯 10-Strike All-In Protocol</h2>", unsafe_allow_html=True)
-    time_html_allin = ""
-    if "ALL-IN" in sig_allin: 
-        log_new_trade("All-In Setup", sig_allin, setup_allin, reason_allin, df_m15)
-        time_html_allin = get_setup_time_html("All-In Setup", sig_allin, "#ffcc00")
+    if "ALL-IN" in sig_allin: log_new_trade("All-In Setup", sig_allin, setup_allin, reason_allin, df_m15)
             
     st.markdown(f"""
     <div class="allin-card">
         <h3 style="margin:0; color:#ffcc00;">{light} All-In Commander</h3>
         <div style="color:{'#888' if 'CLOSED' in sig_allin else ('#ffcc00' if 'WAIT' in sig_allin else '#00ff00')}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_allin}</div>
         <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Logic:</b><br>{reason_allin.replace('<br>', '<br>- ')}</div>
-        {time_html_allin}
     """, unsafe_allow_html=True)
     if setup_allin:
         st.markdown(f"""<div style="background-color:#111; padding:15px; border-radius:8px; border: 1px solid #444; margin-top: 15px;"><div style="color:#ffcc00; font-weight:bold; margin-bottom:5px;">🎯 1:2 Geometry Setup:</div><div>📍 <b>Entry:</b> {setup_allin.get('Entry','')}</div><div style="color:#ff4444;">🛑 <b>SL:</b> {setup_allin.get('SL','')}</div><div style="color:#00ff00;">💰 <b>TP:</b> {setup_allin.get('TP','')}</div></div>""", unsafe_allow_html=True)
@@ -701,17 +740,14 @@ with col_allin:
 
 with col_normal:
     st.markdown("<h2 class='title-header' style='color: #00ccff;'>⭐ 5-Star Trade Matrix</h2>", unsafe_allow_html=True)
-    time_html_norm = ""
     if "WAIT" not in sig_norm and "CLOSED" not in sig_norm and setup_norm: 
         log_new_trade("Normal Setup", sig_norm, setup_norm, reason_norm, df_m15)
-        time_html_norm = get_setup_time_html("Normal Setup", sig_norm, "#00ccff")
             
     st.markdown(f"""
     <div class="plan-card">
         <h3 style="margin:0; color:#00ccff;">🃏 Daily Setup (Quant Mode)</h3>
         <div style="color:{'#ffcc00' if 'WAIT' in sig_norm else '#00ff00'}; font-size:24px; font-weight:bold; margin-top:10px;">{sig_norm}</div>
         <div style="font-size:14px; margin-top:10px; color:#fff;"><b>Score & Logic:</b><br>{reason_norm}</div>
-        {time_html_norm}
     """, unsafe_allow_html=True)
     
     if setup_norm:
