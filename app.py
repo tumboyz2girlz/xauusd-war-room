@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.27", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.28", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -102,7 +102,7 @@ def get_market_data():
             if 'NEWS' in data:
                 now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
                 for ev in data['NEWS']:
-                    try: # 🛡️ บังคับตัวเลขเวลาและดักจับ Error
+                    try:
                         event_dt = datetime.datetime.utcfromtimestamp(float(ev['time_sec'])) + datetime.timedelta(hours=7)
                         time_diff_hours = (event_dt - now_thai).total_seconds() / 3600
                         time_str = event_dt.strftime("%d %b | %H:%M น.")
@@ -721,18 +721,22 @@ if not is_market_closed and now_thai.hour == 19 and now_thai.minute >= 30 and st
     send_telegram_notify(generate_telegram_us_briefing(trend_h4_str, trend_m15_str, metrics, sentiment, final_news_list, war_news, st.session_state.spdr_manual))
     st.session_state.last_us_open_summary_date = current_date_str
 
+# --- ส่วน UI ---
+st.title("🦅 XAUUSD WAR Room: Institutional Quant Setup (v12.28)")
+st.markdown(f"<div class='session-card'>📍 Active Market Killzone: {current_session}</div>", unsafe_allow_html=True)
+
 with st.sidebar:
     st.header("💻 War Room Terminal")
     layout_mode = st.radio("Display:", ["🖥️ Desktop", "📱 Mobile"])
     
-    # 💡 ปุ่ม Refresh สีแดง สะดุดตา ให้กดเพื่อล้าง Cache ทิ้ง!
+    # 💡 ปุ่ม Reboot ฉุกเฉินเพื่อล้าง Cache ทิ้ง
     if st.button("🔄 Refresh & Clear Cache", type="primary"): 
         st.cache_data.clear()
         st.rerun()
     
     st.markdown("---")
     st.subheader("🏦 อัปเดตกองทุน SPDR")
-    new_spdr = st.text_input("ระบุค่า SPDR ล่าสุด (เช่น +3.14)", value=st.session_state.spdr_manual)
+    new_spdr = st.text_input("ระบุค่า SPDR ล่าสุด (เช่น +3.14 หรือ -1.5)", value=st.session_state.spdr_manual)
     if new_spdr != st.session_state.spdr_manual:
         st.session_state.spdr_manual = new_spdr
         st.rerun()
@@ -744,7 +748,6 @@ with st.sidebar:
         if "Pending" in ev['actual'] and -12.0 <= ev.get('time_diff_hours', 0) <= 24.0:
             has_pending = True
             source_tag = "⚡" if ev.get('source') == 'MT5' else "🌐"
-            # 💡 บังคับโชว์วันที่ในเมนู Override
             time_display = ev['dt'].strftime('%d %b | %H:%M น.')
             new_val = st.text_input(f"{source_tag} [{time_display}] {ev['title']}", value=st.session_state.manual_overrides.get(ev['title'], ""), key=f"override_{i}")
             if new_val != st.session_state.manual_overrides.get(ev['title'], ""):
@@ -752,14 +755,12 @@ with st.sidebar:
                 st.rerun()
     if not has_pending: st.write("✅ ข้อมูลอัปเดตสมบูรณ์")
 
-st.title("🦅 XAUUSD WAR Room: Institutional Quant Setup")
-st.markdown(f"<div class='session-card'>📍 Active Market Killzone: {current_session}</div>", unsafe_allow_html=True)
-
 c1, c2, c3, c4, c5, c6 = st.columns((1,1,1,1,1,1))
 with c1: st.metric("XAUUSD", f"${metrics['GOLD'][0]:,.2f}", f"{metrics['GOLD'][1]:.2f}%")
 with c2: st.metric("GC=F", f"${metrics['GC_F'][0]:,.2f}", f"{metrics['GC_F'][1]:.2f}%")
 with c3: st.metric("DXY", f"{metrics['DXY'][0]:,.2f}", f"{metrics['DXY'][1]:.2f}%", delta_color="inverse")
 with c4: st.metric("US10Y", f"{metrics['US10Y'][0]:,.2f}", f"{metrics['US10Y'][1]:.2f}%", delta_color="inverse")
+# 💡 นำ SPDR ไปเข้าตัวแปลภาษาตรงนี้
 with c5: st.metric("SPDR Flow", interpret_spdr(st.session_state.spdr_manual))
 with c6: st.metric("Retail Senti.", f"S:{sentiment.get('short',50)}%", f"L:{sentiment.get('long',50)}%", delta_color="off")
 
@@ -828,7 +829,6 @@ def display_intelligence():
     with tab_eco:
         if final_news_list:
             for ev in final_news_list: 
-                # 💡 บังคับการแสดงผลวันที่หน้าเว็บแบบ Real-time ข้ามระบบ Cache ไปเลย
                 time_display = ev['dt'].strftime('%d %b | %H:%M น.')
                 st.markdown(f"<div class='ff-card' style='border-left-color: {'#ff3333' if ev['impact']=='High' else '#ff9933'};'><div style='font-size:11px; color:#aaa;'>{'⚡ MT5' if ev.get('source')=='MT5' else '🌐 FF'} | {time_display}</div><div style='font-size:15px;'><b>{ev['title']}</b></div><div style='font-size:13px; color:#aaa;'>Forecast: {ev['forecast']} | <span style='color:#ffcc00;'>Actual: {ev['actual']}</span></div></div>", unsafe_allow_html=True)
         else: st.write("ไม่มีข่าว")
