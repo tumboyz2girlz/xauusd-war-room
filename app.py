@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.29", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.30", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -108,8 +108,8 @@ def get_market_data():
                         time_str = event_dt.strftime("%d %b | %H:%M น.")
                         mt5_news.append({'source': 'MT5', 'title': ev['title'], 'time': time_str, 'impact': ev['impact'], 'actual': st.session_state.manual_overrides.get(ev['title'], ev['actual']), 'forecast': ev['forecast'], 'direction': ev.get('direction', ''), 'dt': event_dt, 'time_diff_hours': time_diff_hours})
                     except Exception as inner_e:
-                        print("News Parse Error:", inner_e)
-    except Exception as e: print("Firebase Error:", e)
+                        pass
+    except Exception as e: pass
     
     try:
         h_gcf = yf.Ticker("GC=F").history(period="5d", interval="15m")
@@ -314,12 +314,12 @@ def detect_choch_and_sweep(df):
     if recent['high'].iloc[-5:-1].max() > highest_high and current_close < recent['low'].iloc[-5:-1].min(): return True, "SELL", recent['high'].iloc[-5:-1].max(), current_close
     return False, "", 0, 0
 
-# --- 🧠 THE "ONE SHOT, ONE KILL" & BREAKEVEN SYSTEM ---
+# --- 🧠 V12.30: THE SMART TRACKER & CANCEL LOGIC ---
 @st.cache_resource
 def get_trade_memory():
     return {"Normal Setup": None, "All-In Setup": None}
 
-def check_active_trades(current_high, current_low):
+def check_active_trades(current_high, current_low, current_close):
     if "ใส่_URL" in GOOGLE_SHEET_API_URL: return
     memory = get_trade_memory()
     
@@ -329,37 +329,54 @@ def check_active_trades(current_high, current_low):
         
         is_long = "BUY" in trade['signal']
         
-        # 1. ตรวจสอบการเข้าออเดอร์
+        # 1. 💡 เช็คว่ายังไม่ได้รับออเดอร์ (Pending)
         if not trade['activated']:
             if is_long and current_low <= trade['entry_val']: trade['activated'] = True
             elif not is_long and current_high >= trade['entry_val']: trade['activated'] = True
             
+            # 💡 ระบบตกรถ (Missed Entry) - ถ้าราคาวิ่งไปชน TP ก่อนมารับ
+            if not trade['activated']:
+                is_missed = False
+                if is_long and current_high >= trade['tp_val']: is_missed = True
+                elif not is_long and current_low <= trade['tp_val']: is_missed = True
+                
+                if is_missed:
+                    tg_msg = f"🚫 [CANCELLED] ตกรถ!\n\nMode: {mode}\nSignal: {trade['signal']}\n\nกราฟวิ่งไปชน TP ที่ {trade['display_tp']} เรียบร้อยแล้ว แต่ราคาไม่ได้ย้อนมารับออเดอร์ในโซน Entry ที่ตั้งไว้\n\n👉 ทำการยกเลิก Setup นี้เพื่อหาจุดเข้าใหม่ครับ"
+                    send_telegram_notify(tg_msg)
+                    memory[mode] = None
+                    continue
+                    
+        # 2. 💡 ถ้าออเดอร์ Active แล้ว ให้ตรวจเช็คผลลัพธ์ (Priority: TP > SL)
         if trade['activated']:
             result = None
+            is_tp = False
+            is_sl = False
             
-            # 💡 2. ระบบ Breakeven Protector (เช็ควิ่งไป 50% หรือยัง)
-            if not trade.get('is_breakeven', False):
+            if is_long:
+                if current_high >= trade['tp_val']: is_tp = True
+                if current_low <= trade['sl_val']: is_sl = True
+            else:
+                if current_low <= trade['tp_val']: is_tp = True
+                if current_high >= trade['sl_val']: is_sl = True
+                
+            # กรณีชนทั้ง TP และ SL ในแท่งเดียวกัน (บั๊กแท่งยาว)
+            if is_tp and is_sl:
+                if is_long: result = "Win / TP ✅" if current_close >= trade['entry_val'] else ("Breakeven (เสมอตัว) 🛡️" if trade.get('is_breakeven') else "Lose / SL ❌")
+                else: result = "Win / TP ✅" if current_close <= trade['entry_val'] else ("Breakeven (เสมอตัว) 🛡️" if trade.get('is_breakeven') else "Lose / SL ❌")
+            elif is_tp: result = "Win / TP ✅"
+            elif is_sl: result = "Breakeven (เสมอตัว) 🛡️" if trade.get('is_breakeven') else "Lose / SL ❌"
+            
+            # 3. ถ้าราคายังไม่ชน TP/SL ให้ตรวจเช็คระยะ 50% เพื่อบังหน้าทุน
+            if not result and not trade.get('is_breakeven', False):
                 if is_long and current_high >= trade['mid_val']:
                     trade['is_breakeven'] = True
-                    trade['sl_val'] = trade['entry_val'] + 1.0 # บังหน้าทุน +1$
-                    send_telegram_notify(f"🚨 [UPDATE: Risk Free] {mode}\n\n✨ ราคาวิ่งไป 50% ของเป้าหมาย TP แล้ว!\n👉 ระบบจำลองขยับ SL มาบังหน้าทุนที่ ${trade['sl_val']:.2f}\n(หากราคาย้อนกลับ จะถือว่าเสมอตัว Breakeven)")
+                    trade['sl_val'] = trade['entry_val'] + 1.0 
+                    send_telegram_notify(f"🚨 [UPDATE: Risk Free] {mode}\n\n✨ ราคาวิ่งไป 50% ของเป้าหมาย TP แล้ว!\n👉 ระบบทำการขยับ SL มาบังหน้าทุนที่ ${trade['sl_val']:.2f}\n(หากราคาย้อนกลับ จะถือว่าเสมอตัว Breakeven 🛡️)")
                 elif not is_long and current_low <= trade['mid_val']:
                     trade['is_breakeven'] = True
-                    trade['sl_val'] = trade['entry_val'] - 1.0 # บังหน้าทุน +1$
-                    send_telegram_notify(f"🚨 [UPDATE: Risk Free] {mode}\n\n✨ ราคาวิ่งไป 50% ของเป้าหมาย TP แล้ว!\n👉 ระบบจำลองขยับ SL มาบังหน้าทุนที่ ${trade['sl_val']:.2f}\n(หากราคาย้อนกลับ จะถือว่าเสมอตัว Breakeven)")
+                    trade['sl_val'] = trade['entry_val'] - 1.0 
+                    send_telegram_notify(f"🚨 [UPDATE: Risk Free] {mode}\n\n✨ ราคาวิ่งไป 50% ของเป้าหมาย TP แล้ว!\n👉 ระบบทำการขยับ SL มาบังหน้าทุนที่ ${trade['sl_val']:.2f}\n(หากราคาย้อนกลับ จะถือว่าเสมอตัว Breakeven 🛡️)")
 
-            # 3. ตรวจสอบการชน TP / SL
-            if is_long:
-                if current_low <= trade['sl_val']: 
-                    result = "Breakeven (เสมอตัว) 🛡️" if trade.get('is_breakeven') else "Lose / SL ❌"
-                elif current_high >= trade['tp_val']: 
-                    result = "Win / TP ✅"
-            else:
-                if current_high >= trade['sl_val']: 
-                    result = "Breakeven (เสมอตัว) 🛡️" if trade.get('is_breakeven') else "Lose / SL ❌"
-                elif current_low <= trade['tp_val']: 
-                    result = "Win / TP ✅"
-                
             if result:
                 try: requests.post(GOOGLE_SHEET_API_URL, json={"action": "update", "id": trade['id'], "result": result}, timeout=3)
                 except: pass
@@ -577,7 +594,6 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
         tp_val = extract_price(tp_str, False, False)
         is_market = "NOW" in sig 
         
-        # 💡 คำนวณจุดกึ่งกลาง (50% TP)
         mid_val = entry_val + ((tp_val - entry_val) / 2) if entry_val > 0 else 0.0
 
         trade_dict = {
@@ -594,9 +610,9 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
             "entry_val": entry_val,
             "sl_val": sl_val,
             "tp_val": tp_val,
-            "mid_val": mid_val, # เก็บ 50% TP ไว้ตรวจจับ
+            "mid_val": mid_val, 
             "activated": is_market,
-            "is_breakeven": False, # สถานะการขยับบังทุน
+            "is_breakeven": False, 
             "timestamp_sec": now
         }
         memory[setup_type] = trade_dict
@@ -678,8 +694,9 @@ sentiment = get_retail_sentiment()
 pol_news, war_news = get_categorized_news() 
 speed_news = get_breaking_news()
 
+# 🧠 V12.30: ส่งราคาปัจจุบันครบ 3 ค่า (High, Low, Close) เพื่อแก้บั๊กแท่งเทียนซ้อนทับ
 if not is_market_closed and df_m15 is not None: 
-    check_active_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']))
+    check_active_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']), float(df_m15.iloc[-1]['close']))
 
 trend_h4_str, trend_h4_dir = identify_trend(df_h4)
 trend_m15_str, trend_m15_dir = identify_trend(df_m15)
@@ -704,7 +721,7 @@ if memory["Normal Setup"] is not None:
     active_trade = memory["Normal Setup"]
     sig_norm = f"⏳ TRACKING: {active_trade['signal']}"
     reason_norm = f"<b>[สถานะ: กำลังรันออเดอร์ รอชน TP/SL]</b><br>{active_trade['display_reason'].replace('- ', '• ')}"
-    setup_norm = {'Entry': active_trade['display_entry'], 'SL': active_trade['display_sl'], 'TP': active_trade['display_tp']}
+    setup_norm = {'Entry': active_trade['display_entry'], 'SL': f"$ {active_trade['sl_val']:.2f} {'(บังทุนแล้ว 🛡️)' if active_trade.get('is_breakeven') else ''}", 'TP': active_trade['display_tp']}
     elapsed_mins = int((time.time() - active_trade["timestamp_sec"]) / 60)
     time_html_norm = f"<div style='font-size:13px; color:#00ccff; margin-top:8px; padding-top:8px; border-top:1px dashed #444;'>🕒 <b>เวลาออก Setup:</b> {active_trade['display_time']} (ผ่านมา {elapsed_mins} นาที)</div>"
 else:
@@ -726,7 +743,7 @@ if memory["All-In Setup"] is not None:
     active_allin = memory["All-In Setup"]
     sig_allin = f"⏳ TRACKING: {active_allin['signal']}"
     reason_allin = f"<b>[สถานะ: กำลังรันออเดอร์ รอชน TP/SL]</b><br>{active_allin['display_reason'].replace('- ', '• ')}"
-    setup_allin = {'Entry': active_allin['display_entry'], 'SL': active_allin['display_sl'], 'TP': active_allin['display_tp']}
+    setup_allin = {'Entry': active_allin['display_entry'], 'SL': f"$ {active_allin['sl_val']:.2f} {'(บังทุนแล้ว 🛡️)' if active_allin.get('is_breakeven') else ''}", 'TP': active_allin['display_tp']}
     elapsed_mins = int((time.time() - active_allin["timestamp_sec"]) / 60)
     time_html_allin = f"<div style='font-size:13px; color:#ffcc00; margin-top:8px; padding-top:8px; border-top:1px dashed #444;'>🕒 <b>เวลาออก Setup:</b> {active_allin['display_time']} (ผ่านมา {elapsed_mins} นาที)</div>"
 else:
@@ -747,7 +764,7 @@ if not is_market_closed and now_thai.hour == 19 and now_thai.minute >= 30 and st
     st.session_state.last_us_open_summary_date = current_date_str
 
 # --- ส่วน UI ---
-st.title("🦅 XAUUSD WAR Room: Institutional Quant Setup (v12.29)")
+st.title("🦅 XAUUSD WAR Room: Institutional Quant Setup (v12.30)")
 st.markdown(f"<div class='session-card'>📍 Active Market Killzone: {current_session}</div>", unsafe_allow_html=True)
 
 with st.sidebar:
