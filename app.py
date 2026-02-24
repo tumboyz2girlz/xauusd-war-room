@@ -270,12 +270,11 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
     if is_market_closed: return "MARKET CLOSED 🛑", "ระบบหยุดการวิเคราะห์เนื่องจากตลาดปิด", {}, False
         
     df_m15['atr'] = ta.atr(df_m15['high'], df_m15['low'], df_m15['close'], length=14)
-    df_m15['rsi'] = ta.rsi(df_m15['close'], length=14)
+    # ตัดการคำนวณ RSI ออกไปคำนวณด้านนอก เพื่อแก้บั๊ก KeyError
     macd = ta.macd(df_m15['close'], fast=12, slow=26, signal=9)
     df_m15 = pd.concat([df_m15, macd], axis=1)
 
     atr = float(df_m15.iloc[-2]['atr'])
-    rsi = float(df_m15.iloc[-1]['rsi'])
     macd_hist = float(df_m15['MACDh_12_26_9'].iloc[-1]) if 'MACDh_12_26_9' in df_m15 else 0.0
     current_m15 = df_m15.iloc[-1]
     red_body_size = current_m15['open'] - current_m15['close']
@@ -368,13 +367,17 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
     star_str = "⭐" * stars
     logic_str = "<br>".join(logic_details) + news_warning
 
+    # ดึงค่า temp rsi ที่คำนวณไว้ด้านนอกมาใช้ชั่วคราว
+    rsi_val = 50.0
+    if 'rsi' in st.session_state: rsi_val = st.session_state.rsi
+
     if trend_m15_dir == "UP":
-        if rsi > 70: return f"WAIT (Overbought)", f"RSI = {rsi:.1f} เข้าเขต Overbought ห้ามไล่ราคา! รอราคาย่อลงมาในโซน{news_warning}", {}, False
+        if rsi_val > 70: return f"WAIT (Overbought)", f"RSI = {rsi_val:.1f} เข้าเขต Overbought ห้ามไล่ราคา! รอราคาย่อลงมาในโซน{news_warning}", {}, False
         setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
         return f"BUY {star_str}", logic_str, setup, False
         
     elif trend_m15_dir == "DOWN":
-        if rsi < 30: return f"WAIT (Oversold)", f"RSI = {rsi:.1f} เข้าเขต Oversold ห้ามไล่ราคาขาย! รอราคาเด้งกลับ{news_warning}", {}, False
+        if rsi_val < 30: return f"WAIT (Oversold)", f"RSI = {rsi_val:.1f} เข้าเขต Oversold ห้ามไล่ราคาขาย! รอราคาเด้งกลับ{news_warning}", {}, False
         setup = {'Entry': smc_entry, 'SL': smc_sl, 'TP': smc_tp}
         return f"SELL {star_str}", logic_str, setup, False
 
@@ -606,7 +609,14 @@ if not is_market_closed and df_m15 is not None: check_pending_trades(float(df_m1
 # 💡 V12.18: ใช้ฟังก์ชันวิเคราะห์เทรนด์ใหม่
 trend_h4_str, trend_h4_dir = identify_trend(df_h4)
 trend_m15_str, trend_m15_dir = identify_trend(df_m15)
-current_rsi = float(df_m15.iloc[-1]['rsi']) if df_m15 is not None and len(df_m15) > 15 else 50.0
+
+# 🛠️ แก้บั๊ก KeyError: 'rsi' (สั่งให้คำนวณ RSI ก่อนดึงค่า)
+current_rsi = 50.0
+if df_m15 is not None and len(df_m15) > 15:
+    temp_rsi = ta.rsi(df_m15['close'], length=14)
+    if temp_rsi is not None and not temp_rsi.empty:
+        current_rsi = float(temp_rsi.iloc[-1])
+        st.session_state.rsi = current_rsi # เก็บค่า RSI ลง Session ไว้ใช้ในฟังก์ชัน
 
 sig_norm, reason_norm, setup_norm, is_flash_crash = calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, is_market_closed, next_red_news, trend_m15_dir, trend_h4_dir)
 sig_allin, reason_allin, setup_allin, light = calculate_all_in_setup(df_m15, next_red_news, metrics, sentiment, is_market_closed)
