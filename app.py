@@ -16,9 +16,10 @@ import re
 import plotly.graph_objects as go
 import os
 import io
+import json
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Kwaktong War Room v12.34", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Kwaktong War Room v12.35", page_icon="🦅", layout="wide", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, limit=None, key="warroom_refresher")
 
 if 'manual_overrides' not in st.session_state: st.session_state.manual_overrides = {}
@@ -27,6 +28,7 @@ FIREBASE_URL = "https://kwaktong-warroom-default-rtdb.asia-southeast1.firebaseda
 GOOGLE_SHEET_API_URL = "https://script.google.com/macros/s/AKfycby1vkYO6JiJfPc6sqiCUEJerfzLCv5LxhU7j16S9FYRpPqxXIUiZY8Ifb0YKiCQ7aj3_g/exec"
 TELEGRAM_BOT_TOKEN = "8239625215:AAF7qUsz2O5mhINRhRYPTICljJsCErDDLD8"
 TELEGRAM_CHAT_ID = "-5078466063"
+SCORE_FILE = "daily_score.json"
 
 st.markdown("""
 <style>
@@ -39,6 +41,7 @@ st.markdown("""
     .ff-card {background-color: #222831; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #555;}
     .news-card {background-color: #131722; padding: 12px; border-radius: 8px; border-left: 4px solid #f0b90b; margin-bottom: 12px;}
     .session-card {background-color: #1a1a2e; padding: 10px; border-radius: 8px; border: 1px solid #ff00ff; text-align: center; margin-bottom: 15px; font-weight: bold; color: #ff00ff;}
+    .scoreboard {background-color: #1a1a2e; padding: 15px; border-radius: 8px; border: 2px solid #d4af37; text-align: center; margin-bottom: 20px;}
     h2.title-header {text-align: center; margin-bottom: 20px; font-weight: bold;}
     .stTabs [data-baseweb="tab"] {background-color: #1a1a2e; border-radius: 5px 5px 0 0;}
     .stTabs [aria-selected="true"] {background-color: #d4af37 !important; color: #000 !important; font-weight: bold;}
@@ -76,7 +79,6 @@ def get_us_briefing_time():
     if dst_start <= now_utc < dst_end: return 19, 30
     else: return 20, 30 
 
-# 💡 V12.34: ดึงข้อมูล SPDR จาก CSV แบบอัตโนมัติ (Cache 4 ชม.)
 @st.cache_data(ttl=14400)
 def fetch_spdr_auto():
     try:
@@ -102,10 +104,48 @@ def fetch_spdr_auto():
     except Exception as e: pass
     return "Neutral"
 
-# กำหนดค่าเริ่มต้นให้ SPDR Manual ถ้ายังไม่เคยกดแก้
 auto_spdr_val = fetch_spdr_auto()
 if 'spdr_manual' not in st.session_state or st.session_state.spdr_manual == "Neutral":
     st.session_state.spdr_manual = auto_spdr_val
+
+# --- 📊 V12.35: DAILY SCOREBOARD (LOCAL JSON) ---
+def load_score():
+    now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+    today_str = now_thai.strftime("%Y-%m-%d")
+    default_score = {"date": today_str, "win": 0, "loss": 0, "be": 0, "pending": 0, "profit": 0.0}
+    try:
+        if os.path.exists(SCORE_FILE):
+            with open(SCORE_FILE, "r") as f:
+                data = json.load(f)
+                if data.get("date") == today_str: return data
+    except: pass
+    return default_score
+
+def save_score(data):
+    try:
+        with open(SCORE_FILE, "w") as f:
+            json.dump(data, f)
+    except: pass
+
+def update_score(action, trade=None):
+    score = load_score()
+    if action == "pending":
+        score["pending"] += 1
+    elif action == "win" and trade:
+        score["pending"] = max(0, score["pending"] - 1)
+        score["win"] += 1
+        score["profit"] += abs(trade['tp_val'] - trade['entry_val']) # TP - Entry x 1$
+    elif action == "loss" and trade:
+        score["pending"] = max(0, score["pending"] - 1)
+        score["loss"] += 1
+        score["profit"] -= abs(trade['entry_val'] - trade['sl_val_orig']) # Entry - SL_เดิม x 1$
+    elif action == "be" and trade:
+        score["pending"] = max(0, score["pending"] - 1)
+        score["be"] += 1
+        score["profit"] += 1.0 # บังหน้าทุน +1$ (Option A)
+    elif action == "cancel":
+        score["pending"] = max(0, score["pending"] - 1)
+    save_score(score)
 
 # --- 2. DATA ENGINE ---
 @st.cache_data(ttl=30)
@@ -310,6 +350,7 @@ def detect_candlestick_reversal(df, direction):
     if len(df) < 3: return False, ""
     c1 = df.iloc[-1] 
     c2 = df.iloc[-2] 
+
     def get_props(c):
         body = abs(c['open'] - c['close'])
         high, low = c['high'], c['low']
@@ -318,8 +359,10 @@ def detect_candlestick_reversal(df, direction):
         is_green = c['close'] > c['open']
         is_red = c['close'] < c['open']
         return body, uw, lw, is_green, is_red
+
     b1, uw1, lw1, g1, r1 = get_props(c1)
     b2, uw2, lw2, g2, r2 = get_props(c2)
+
     if direction == "UP": 
         if r2 and g1 and c1['close'] > c2['open'] and c1['open'] <= c2['close']: return True, "Bullish Engulfing (กลืนกินขาขึ้น)"
         if lw1 > (b1 * 2) and uw1 < b1 and lw1 > 1.0: return True, "Bullish Pinbar / Hammer (หางยาวแทงลง)"
@@ -354,7 +397,8 @@ def process_news_alerts(pol_news, war_news, speed_news, mt5_news):
     mem = get_global_memory()
     all_rss = pol_news + war_news + speed_news
     for n in all_rss:
-        if n['direction'] != "⚪ NEUTRAL" and n['link'] not in mem["sent_news_links"]:
+        # 💡 V12.35: กรองข่าวเข้มงวด ลดการสแปม (Score ต้อง >= 6.0 เท่านั้น)
+        if n['score'] >= 6.0 and n['direction'] != "⚪ NEUTRAL" and n['link'] not in mem["sent_news_links"]:
             mem["sent_news_links"].add(n['link'])
             msg = f"📰 [BREAKING NEWS]\n\n🔥 หัวข้อ: {n['title_th']}\n({n['title_en']})\n\n🤖 AI วิเคราะห์: {n['direction']}\n📈 ระดับความรุนแรง: {n['score']:.1f}/10\n\n🔗 อ่านต่อ: {n['link']}"
             send_telegram_notify(msg)
@@ -403,6 +447,7 @@ def check_active_trades(current_high, current_low, current_close):
                     send_telegram_notify(f"🚫 [CANCELLED] ตกรถ!\n\nMode: {mode}\nSignal: {trade['signal']}\n\nกราฟวิ่งไปชน TP ที่ {trade['display_tp']} เรียบร้อยแล้ว แต่ราคาไม่ได้ย้อนมารับออเดอร์ในโซน Entry ที่ตั้งไว้\n\n👉 ยกเลิก Setup นี้เพื่อหาจุดเข้าใหม่ครับ")
                     mem["last_sent_entry"][mode] = trade['display_entry'] 
                     mem["active_trades"][mode] = None
+                    update_score("cancel") # ลบยอด Pending ออกจากกระดาน
                     continue
                     
         if trade['activated']:
@@ -435,10 +480,17 @@ def check_active_trades(current_high, current_low, current_close):
             if result:
                 try: requests.post(GOOGLE_SHEET_API_URL, json={"action": "update", "id": trade['id'], "result": result}, timeout=3)
                 except: pass
+                
+                # 💡 อัปเดตกระดานคะแนน
+                if "Win" in result: update_score("win", trade)
+                elif "Lose" in result: update_score("loss", trade)
+                elif "Breakeven" in result: update_score("be", trade)
+
                 tg_msg = f"🏁 [RESULT] สรุปผล Setup!\n\nMode: {mode}\nSignal: {trade['signal']}\n\n📍 Entry: {trade['display_entry']}\n🛑 SL: {trade['display_sl']}\n💰 TP: {trade['display_tp']}\n"
                 if trade['rr'] > 0: tg_msg += f"🧮 Risk:Reward: 1:{trade['rr']:.2f}\n\n❓ Why?:\n- {trade['display_reason']}\n\n🎲 Implied Win Rate: {trade['wr_pct']}%\n📈 Expected Value (EV): {trade['ev_r']:+.2f} R\n\n"
                 tg_msg += f"⚡ **Result: {result}**"
                 send_telegram_notify(tg_msg)
+                
                 mem["last_sent_entry"][mode] = trade['display_entry']
                 mem["active_trades"][mode] = None 
 
@@ -509,7 +561,6 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
     if is_news_danger: return "WAIT (News Danger 🛑)", f"ระบบระงับการเข้าเทรดเพื่อหลีกเลี่ยงความผันผวนของข่าว{news_warning}", {}, False
     if not smc_found: return "WAIT", f"ยังไม่พบโซนย่อตัว (Pullback/FVG) ใน M15 รอราคาสร้างฐาน{news_warning}", {}, False
     
-    # 💡 V12.34: ดึงค่า SPDR มาคำนวณดาว
     spdr_val = 0.0
     try:
         spdr_str = st.session_state.spdr_manual.replace('+', '').replace(',', '').strip()
@@ -518,17 +569,14 @@ def calculate_normal_setup(df_m15, df_h4, final_news_list, sentiment, metrics, i
 
     stars = 2 
     logic_details = [f"⭐ M15 พบจุดเข้า Buy on Dip / Sell on Rally (FVG)"]
-    
     if trend_m15_dir == trend_h4_dir: stars += 1; logic_details.append("⭐ เทรนด์ H4 สนับสนุนทิศทาง M15")
     else: logic_details.append("➖ H4 ขัดแย้งกับ M15 (เป็นการเทรด Pullback สั้นๆ)")
-    
     if is_mtf_aligned: stars += 1; logic_details.append("🔥 โซน FVG ซ้อนทับกับแนวรับ/ต้าน ของ H4 (High Probability!)")
 
     dxy_trend = metrics['DXY'][1]
     if (trend_m15_dir == "UP" and dxy_trend < 0) or (trend_m15_dir == "DOWN" and dxy_trend > 0):
         stars += 1; logic_details.append("⭐ ดัชนี DXY เคลื่อนไหวสนับสนุนทิศทางทองคำ")
 
-    # 💡 ให้น้ำหนัก SPDR (Macro Flow) เท่ากับ DXY (Micro Momentum)
     if (trend_m15_dir == "UP" and spdr_val > 0) or (trend_m15_dir == "DOWN" and spdr_val < 0):
         stars += 1; logic_details.append(f"⭐ SPDR Smart Money: สถาบันเก็บของสอดคล้องทิศทาง ({'+' if spdr_val>0 else ''}{spdr_val} ตัน)")
 
@@ -646,6 +694,7 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
             "ev_r": ev_r,
             "entry_val": entry_val,
             "sl_val": sl_val,
+            "sl_val_orig": sl_val, # 💡 เก็บ SL เดิมไว้คำนวณตอนขาดทุน
             "tp_val": tp_val,
             "mid_val": mid_val, 
             "activated": is_market,
@@ -653,6 +702,7 @@ def log_new_trade(setup_type, sig, setup_data, reason_text, df_m15):
             "timestamp_sec": now
         }
         mem["active_trades"][setup_type] = trade_dict
+        update_score("pending") # 💡 อัปเดตกระดานคะแนน
 
         payload = {"action": "log", "id": trade_id, "timestamp": now_str, "setup_type": setup_type, "signal": sig, "entry": entry_str, "sl": sl_str, "tp": tp_str, "reason": clean_reason}
         requests.post(GOOGLE_SHEET_API_URL, json=payload, timeout=3)
@@ -731,6 +781,7 @@ pol_news, war_news = get_categorized_news()
 speed_news = get_breaking_news()
 
 mem = get_global_memory()
+score = load_score() # โหลดคะแนน Daily
 
 if not is_market_closed: process_news_alerts(pol_news, war_news, speed_news, mt5_news)
 if not is_market_closed and df_m15 is not None: check_active_trades(float(df_m15.iloc[-1]['high']), float(df_m15.iloc[-1]['low']), float(df_m15.iloc[-1]['close']))
@@ -812,7 +863,22 @@ if not is_market_closed and now_thai.hour == briefing_hour and now_thai.minute >
     mem["last_us_briefing_date"] = current_date_str 
 
 # --- ส่วน UI ---
-st.title("🦅 XAUUSD WAR Room: Institutional Quant Setup (v12.34)")
+st.title("🦅 XAUUSD WAR Room: Institutional Quant Setup (v12.35)")
+
+# 💡 V12.35: แทรกกระดานคะแนน Scoreboard ตรงนี้!
+score = load_score() # อัปเดตล่าสุด
+profit_color = "#00ff00" if score['profit'] >= 0 else "#ff3333"
+profit_sign = "+" if score['profit'] >= 0 else "-"
+st.markdown(f"""
+<div class="scoreboard">
+    <div style="color:#d4af37; font-size: 18px; margin-bottom: 5px;">📊 <b>Daily Performance (วันนี้)</b></div>
+    <div style="font-size: 20px;">🟩 Win: {score['win']} &nbsp;|&nbsp; 🟥 Loss: {score['loss']} &nbsp;|&nbsp; 🛡️ BE: {score['be']} &nbsp;|&nbsp; ⏳ Pending: {score['pending']}</div>
+    <div style="font-size: 24px; font-weight: bold; margin-top: 8px; color: {profit_color};">
+        Fixlot 0.01 :: Net Profit: {profit_sign}${abs(score['profit']):.2f}
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 st.markdown(f"<div class='session-card'>📍 Active Market Killzone: {current_session}</div>", unsafe_allow_html=True)
 
 with st.sidebar:
